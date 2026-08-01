@@ -4,6 +4,12 @@
 // Ownership is per file. Add your commands to your own file; do not edit
 // another agent's. See INTERFACES.md.
 
+// meta (core agent)
+import "./api.ts";
+import "./auth.ts";
+import "./cache-cmd.ts";
+import "./schema.ts";
+
 // issue agent
 import "./issue.ts";
 import "./issue-extra.ts";
