@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Bun compiles the single binary; GoReleaser only packages and publishes it.
+# The bun builder needs GoReleaser v2.6+, homebrew_casks needs v2.10+.
+version: 2
+
+project_name: lin
+
+before:
+  hooks:
+    - bun install --frozen-lockfile
+
+builds:
+  - id: lin
+    builder: bun
+    binary: lin
+    main: ./src/main.ts
+    # `bun-` is prefixed automatically. Bun cross-compiles, so one Linux runner
+    # produces every artifact.
+    targets:
+      - darwin-arm64
+      - darwin-x64
+      - linux-x64
+      - linux-arm64
+
+archives:
+  - id: lin
+    ids: [lin]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: Laurens-Nys
+    name: linear-cli
+  prerelease: auto
+
+homebrew_casks:
+  # The tap repository must already exist before the first stable tag; a
+  # prerelease tag (v0.1.0-rc.1) skips this step through `skip_upload: auto`.
+  - name: lin
+    repository:
+      owner: Laurens-Nys
+      name: homebrew-tap
+      # Pushing to another repository needs a token with write access to the
+      # tap; GITHUB_TOKEN cannot do it. Add the secret, then uncomment.
+      # token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/Laurens-Nys/linear-cli
+    description: Linear CLI for coding agents
+    license: MIT
+    skip_upload: auto
+    hooks:
+      post:
+        # The binary is not notarized, so macOS would quarantine it.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lin"]
+          end
