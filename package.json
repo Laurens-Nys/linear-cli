@@ -1,0 +1,20 @@
+{
+  "name": "lin",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "lin": "./src/main.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "build": "bun build --compile ./src/main.ts --outfile dist/lin"
+  },
+  "dependencies": {
+    "@toon-format/toon": "^4.1.0"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.14",
+    "typescript": "^5.9.0"
+  }
+}
