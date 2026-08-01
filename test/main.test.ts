@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseArgs, renderCommandHelp, renderGlobalHelp, run, VERSION } from "../src/main.ts";
 import { EXIT } from "../src/out.ts";
 import { getCommand, GLOBAL_FLAGS, type FlagSpec } from "../src/registry.ts";
-import { captureStdout } from "./harness.ts";
+import { captureStdout, mock } from "./harness.ts";
 
 const SPECS: Record<string, FlagSpec> = {
   ...GLOBAL_FLAGS,
@@ -61,9 +61,13 @@ describe("flag parsing", () => {
     expect(parseArgs(["--after", "-Nzc5"], SPECS).flags["after"]).toBe("-Nzc5");
   });
 
-  test("bare --fields is allowed, so a command can list its columns", () => {
-    expect(parseArgs(["--fields"], SPECS).flags["fields"]).toBe(true);
-    expect(parseArgs(["--fields", "id,title"], SPECS).flags["fields"]).toBe("id,title");
+  test("a bareOk flag may stand alone or take a value", () => {
+    const specs = {
+      ...SPECS,
+      fields: { type: "string", valueHint: "a,b,c", doc: "columns", bareOk: true } as FlagSpec,
+    };
+    expect(parseArgs(["--fields"], specs).flags["fields"]).toBe(true);
+    expect(parseArgs(["--fields", "id,title"], specs).flags["fields"]).toBe("id,title");
   });
 
   test("-- ends flag parsing", () => {
@@ -117,17 +121,34 @@ describe("dispatch", () => {
   });
 
   test("a bare identifier routes to issue view", async () => {
-    // `issue view` is not registered yet; the error proves the rewrite happened.
-    await expect(run(["ENG-42"])).rejects.toMatchObject({
-      exitCode: EXIT.input,
-      message: 'unknown command "issue view"',
-    });
+    // The mock proves dispatch without touching the network: the view query
+    // fires for the identifier and nothing else runs.
+    const m = mock([{ match: "LinIssueView", errors: [{ message: "Entity not found" }] }]);
+    const captured = captureStdout();
+    try {
+      await expect(run(["ENG-42"])).rejects.toMatchObject({ exitCode: EXIT.notFound });
+    } finally {
+      captured.restore();
+      m.restore();
+    }
+    expect(m.calls).toHaveLength(1);
+    expect(m.calls[0]?.operation).toBe("LinIssueView");
+    expect(JSON.stringify(m.calls[0]?.variables)).toContain("ENG-42");
   });
 
   test("an issue URL routes the same way", async () => {
-    await expect(run(["https://linear.app/acme/issue/ENG-42/fix-login"])).rejects.toMatchObject({
-      message: 'unknown command "issue view"',
-    });
+    const m = mock([{ match: "LinIssueView", errors: [{ message: "Entity not found" }] }]);
+    const captured = captureStdout();
+    try {
+      await expect(run(["https://linear.app/acme/issue/ENG-42/fix-login"])).rejects.toMatchObject({
+        exitCode: EXIT.notFound,
+      });
+    } finally {
+      captured.restore();
+      m.restore();
+    }
+    expect(m.calls[0]?.operation).toBe("LinIssueView");
+    expect(JSON.stringify(m.calls[0]?.variables)).toContain("ENG-42");
   });
 
   test("an unknown command is exit 2 and suggests real ones", async () => {

@@ -108,8 +108,8 @@ function toon(value: string | number | boolean): unknown {
 // --- shape 1: tables --------------------------------------------------------
 
 export interface MoreInfo {
-  /** How many rows exist beyond the ones printed. */
-  count: number;
+  /** How many rows exist beyond the ones printed; absent when the connection reports no total. */
+  count?: number | undefined;
   /** The exact command that fetches the next page. */
   command: string;
 }
@@ -140,7 +140,10 @@ export function renderTable(
     parts.push(encode({ [key]: projected }));
   }
 
-  if (options.more) parts.push(`# ${options.more.count} more \u00b7 ${options.more.command}`);
+  if (options.more) {
+    const count = options.more.count === undefined ? "" : `${options.more.count} `;
+    parts.push(`# ${count}more \u00b7 ${options.more.command}`);
+  }
   return parts.join("\n");
 }
 

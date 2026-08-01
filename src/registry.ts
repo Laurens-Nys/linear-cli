@@ -59,14 +59,7 @@ export interface CommandSpec {
 
 /** Available on every command; commands may not redeclare these names. */
 export const GLOBAL_FLAGS: Record<string, FlagSpec> = {
-  fields: {
-    type: "string",
-    valueHint: "a,b,c",
-    doc: "override the printed columns; bare --fields lists what is available",
-    bareOk: true,
-  },
   limit: { type: "number", short: "n", valueHint: "N", doc: "maximum rows to return (default 50)" },
-  all: { type: "boolean", doc: "auto-paginate to the end, capped at 1000 rows" },
   after: { type: "string", valueHint: "cursor", doc: "start from a pagination cursor" },
   team: { type: "string", valueHint: "KEY", doc: "team key, overriding config" },
   quiet: { type: "boolean", short: "q", doc: "receipts print the bare identifier only" },
