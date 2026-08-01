@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseArgs, renderCommandHelp, renderGlobalHelp, run, VERSION } from "../src/main.ts";
 import { EXIT } from "../src/out.ts";
 import { getCommand, GLOBAL_FLAGS, type FlagSpec } from "../src/registry.ts";
-import { captureStdout, mock } from "./harness.ts";
+import { captureStdout, mock, sandbox } from "./harness.ts";
 
 const SPECS: Record<string, FlagSpec> = {
   ...GLOBAL_FLAGS,
@@ -123,6 +123,7 @@ describe("dispatch", () => {
   test("a bare identifier routes to issue view", async () => {
     // The mock proves dispatch without touching the network: the view query
     // fires for the identifier and nothing else runs.
+    const box = sandbox();
     const m = mock([{ match: "LinIssueView", errors: [{ message: "Entity not found" }] }]);
     const captured = captureStdout();
     try {
@@ -130,6 +131,7 @@ describe("dispatch", () => {
     } finally {
       captured.restore();
       m.restore();
+      box.cleanup();
     }
     expect(m.calls).toHaveLength(1);
     expect(m.calls[0]?.operation).toBe("LinIssueView");
@@ -137,6 +139,7 @@ describe("dispatch", () => {
   });
 
   test("an issue URL routes the same way", async () => {
+    const box = sandbox();
     const m = mock([{ match: "LinIssueView", errors: [{ message: "Entity not found" }] }]);
     const captured = captureStdout();
     try {
@@ -146,6 +149,7 @@ describe("dispatch", () => {
     } finally {
       captured.restore();
       m.restore();
+      box.cleanup();
     }
     expect(m.calls[0]?.operation).toBe("LinIssueView");
     expect(JSON.stringify(m.calls[0]?.variables)).toContain("ENG-42");
