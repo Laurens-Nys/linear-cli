@@ -28,8 +28,10 @@ issues[3]{id,title,state,priority,updated}:
 - Pagination: when more pages exist, append a comment line (comments are legal TOON, decoders strip them) carrying the exact continuation command:
 
 ```
-# 11 more · lin issue list --team ENG --after <cursor>
+# more · lin issue list --team ENG --after <cursor>
 ```
+
+  The count appears only when the connection reports a true total (search does: `# 11 more · ...`); plain connections carry no total and the line never invents one.
 
 - Dates render as `YYYY-MM-DD`. Priorities render as words: `urgent, high, medium, low, none`. Booleans as `true/false`. Empty cells stay empty.
 
@@ -104,7 +106,7 @@ Full form: `lin <noun> <verb> [args] [flags]`. Top-level aliases for the hot pat
 - Branch inference: extract `[A-Z]+-\d+` (case-insensitive) from the current git branch name.
 - Team defaults come from config; `--team` overrides.
 
-Global flags: `--fields a,b,c` (override curated columns; bare `--fields` lists available fields for that command, exit 2), `-n/--limit N` (default 50), `--all` (auto-paginate, cap 1000 with a warning comment line), `--after <cursor>`, `--team KEY`, `-q/--quiet`, `--no-cache`, `--version`, `-h/--help`.
+Global flags: `-n/--limit N` (default 50), `--after <cursor>`, `--team KEY`, `-q/--quiet`, `--no-cache`, `--version`, `-h/--help`. Deferred to v0.2: `--fields` (column override) and `--all` (auto-pagination) — until they work they stay unregistered, so they fail loudly as unknown flags instead of silently doing nothing.
 
 ## Configuration, auth, cache
 
@@ -152,7 +154,7 @@ Comment refs are the first 8 hex chars of the comment UUID; commands accept the 
 |---|---|---|
 | `project list` | `--team`, `--initiative`, `--state` | rows `{id,name,state,lead,target}` (id = project slugId short form) |
 | `project view <ref>` | record + content body + milestones table + last 3 posts | record |
-| `project create / update` | `--name`, `-d/--body`, `--team` (repeat ok), `--lead`, `--target YYYY-MM-DD`, `--state` | receipt |
+| `project create / update` | `--name`, `-d/--body`, `--team A,B` (comma-separated for multi-team), `--lead`, `--target YYYY-MM-DD`, `--state` | receipt |
 | `project post <ref> --health on-track\|at-risk\|off-track -m <text\|@file\|->` | a project status update (the ProjectUpdate entity) | receipt |
 | `project posts <ref>` | recent status updates | rows `{date,author,health,body}` clipped |
 | `milestone list --project <ref>` | milestones with progress | rows `{id,name,target,progress}` |
@@ -183,8 +185,8 @@ Naming trap, verified against the schema: the GraphQL mutation `projectUpdate` e
 | `template list [--team]` / `template view <ref>` | issue templates | rows / record |
 | `customer list / view <ref>` | customers with tier and status | rows `{name,tier,status}` / record |
 | `customer create` | `--name`, `--domain`, `--tier` | receipt |
-| `customer need add <customer> --issue <id> [-m text]` | attach a customer request to an issue | receipt |
-| `customer need list [--customer\|--issue]` | requests | rows `{ref,customer,issue,body}` clipped |
+| `need add <customer> --issue <id> [-m text]` | attach a customer request to an issue (registered as the two-word `need add`, grouped under customer in help) | receipt |
+| `need list [--customer\|--issue]` | requests | rows `{ref,customer,issue,body}` clipped |
 | `inbox` | unread notifications, newest first; `--all` includes read | rows `{ref,type,actor,target,age}` |
 | `inbox read <ref...\|--all>` | mark read | receipt |
 | `inbox archive <ref...\|--all>` | archive | receipt |
