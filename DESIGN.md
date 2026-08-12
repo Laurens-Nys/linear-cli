@@ -195,7 +195,7 @@ Naming trap, verified against the schema: the GraphQL mutation `projectUpdate` e
 
 | Command | Behavior | Output |
 |---|---|---|
-| `tui` | read-only browser for my open assigned issues; session-only Team, Project, Sort, and server-side title controls narrow/reorder Mine + Open; every control supports mouse and keyboard; requires interactive stdin and stdout | full-screen terminal interface |
+| `tui` | read-only browser for my open assigned issues; session-only Team, Project, Sort, Group, and server-side title controls narrow/reorder Mine + Open; Linear workflow categories drive status icons and optional client-side grouping while the selected server sort remains intact inside groups; filled pane headers become one-pane tabs on narrow terminals; every control supports mouse and keyboard; requires interactive stdin and stdout | full-screen terminal interface |
 | `api [query]` | raw GraphQL. Query from arg or stdin. `--var k=v` (string), `--vars-json '{...}'`, `--paginate` (follows `pageInfo` on the single top-level connection), `--toon` re-encodes the response data as TOON | raw JSON `data` (or errors, exit 1) |
 | `schema [pattern]` | search the embedded SDL: prints matching type headers and field lines with 1 line of context; `--type <Name>` prints the full type block; `--full` dumps everything | SDL fragments |
 | `skill` | print an agent cheatsheet (SKILL.md shape) generated from the command registry at runtime — synopsis, flags, one example per command, the output contract, exit codes. `--install <dir>` writes `<dir>/SKILL.md` | markdown |

@@ -1,6 +1,14 @@
 import { gql } from "../client.ts";
 
 export type TuiSort = "updated" | "created" | "priority";
+export type TuiWorkflowStateType =
+  | "triage"
+  | "backlog"
+  | "unstarted"
+  | "started"
+  | "completed"
+  | "canceled"
+  | "duplicate";
 
 export interface TuiIssueQuery {
   limit: number;
@@ -18,7 +26,7 @@ export interface TuiIssue {
   updatedAt: string;
   dueDate?: string | null;
   url: string;
-  state: { name: string; color?: string | null };
+  state: { name: string; color: string; type: TuiWorkflowStateType };
   team: { key: string; name: string };
   project?: { name: string } | null;
   labels: { nodes: { name: string }[] };
@@ -50,7 +58,7 @@ export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: Is
       updatedAt
       dueDate
       url
-      state { name color }
+      state { name color type }
       team { key name }
       project { name }
       labels { nodes { name } }

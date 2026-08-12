@@ -21,6 +21,11 @@ import {
   TUI_SORT_LABELS,
   type TuiSort,
 } from "./data.ts";
+import {
+  IssueListEvents,
+  IssueListRenderable,
+  type TuiGroupMode,
+} from "./issue-list.ts";
 import { GROK_NIGHT as C } from "./theme.ts";
 
 const PRIORITIES = ["No priority", "Urgent", "High", "Medium", "Low"] as const;
@@ -91,14 +96,6 @@ export function issueDetail(issue: TuiIssue | undefined): string {
   return meta.filter((line, index) => line !== "" || meta[index - 1] !== "").join("\n");
 }
 
-function issueOptions(issues: readonly TuiIssue[]): SelectOption[] {
-  return issues.map((issue) => ({
-    name: `${issue.identifier}  ${issue.title}`,
-    description: `${issue.state.name}  ·  updated ${date(issue.updatedAt)}`,
-    value: issue,
-  }));
-}
-
 function clip(value: string, length: number): string {
   return value.length <= length ? value : `${value.slice(0, Math.max(1, length - 1))}…`;
 }
@@ -120,21 +117,31 @@ export class TuiApp {
   readonly teamChip: BoxRenderable;
   readonly projectChip: BoxRenderable;
   readonly sortChip: BoxRenderable;
+  readonly groupChip: BoxRenderable;
   readonly teamText: TextRenderable;
   readonly projectText: TextRenderable;
   readonly sortText: TextRenderable;
+  readonly groupText: TextRenderable;
   readonly search: BrowserInput;
-  readonly list: FocusSelect;
+  readonly list: IssueListRenderable;
   readonly detail: ScrollBoxRenderable;
   readonly detailText: TextRenderable;
   readonly status: TextRenderable;
   readonly footer: TextRenderable;
+  readonly paneTabs: BoxRenderable;
+  readonly issuesTab: BoxRenderable;
+  readonly detailTab: BoxRenderable;
+  readonly issuesTabText: TextRenderable;
+  readonly detailTabText: TextRenderable;
   private readonly main: BoxRenderable;
+  private readonly workspace: BoxRenderable;
   private stopped = false;
   private generation = 0;
   private selectedTeamId: string | undefined;
   private selectedProjectId: string | undefined;
   private sort: TuiSort = "updated";
+  private groupMode: TuiGroupMode = "status";
+  private activePane: "issues" | "detail" = "issues";
   private appliedTitle = "";
   private detailIssueId: string | undefined;
   private reconcilingIssues = false;
@@ -165,6 +172,7 @@ export class TuiApp {
     [this.teamChip, this.teamText] = this.makeChip("team");
     [this.projectChip, this.projectText] = this.makeChip("project");
     [this.sortChip, this.sortText] = this.makeChip("sort");
+    [this.groupChip, this.groupText] = this.makeGroupChip();
     this.search = new BrowserInput(renderer, {
       id: "tui-search", width: "28%", placeholder: "Search title…",
       backgroundColor: C.surface0, focusedBackgroundColor: C.surface1,
@@ -180,34 +188,10 @@ export class TuiApp {
     this.controls.add(this.teamChip);
     this.controls.add(this.projectChip);
     this.controls.add(this.sortChip);
+    this.controls.add(this.groupChip);
     this.controls.add(this.search);
 
-    this.list = new FocusSelect(renderer, {
-      id: "tui-list", width: "42%", height: "100%", options: [], showDescription: true,
-      showScrollIndicator: true, wrapSelection: false, backgroundColor: C.panel,
-      focusedBackgroundColor: C.panel, textColor: C.text, focusedTextColor: C.text,
-      descriptionColor: C.muted, selectedTextColor: C.text, selectedDescriptionColor: C.secondary,
-      keyBindings: [
-        { name: "up", action: "move-up" }, { name: "k", action: "move-up" },
-        { name: "down", action: "move-down" }, { name: "j", action: "move-down" },
-      ],
-      onMouseDown: (event) => {
-        const row = Math.max(0, Math.floor((event.y - this.list.screenY) / 2));
-        const offset = visibleSelectOffset(
-          this.list.getSelectedIndex(), this.list.options.length, this.list.height, 2,
-        );
-        this.list.setSelectedIndex(offset + row);
-        this.list.focus();
-        event.preventDefault();
-      },
-      onMouseScroll: (event) => {
-        if (event.scroll?.direction === "up") this.list.moveUp();
-        if (event.scroll?.direction === "down") this.list.moveDown();
-        this.list.focus(); event.preventDefault();
-      },
-      onMouseOver: () => this.renderer.setMousePointer("pointer"),
-      onMouseOut: () => this.renderer.setMousePointer("default"),
-    });
+    this.list = new IssueListRenderable(renderer);
 
     this.detailText = new TextRenderable(renderer, {
       id: "tui-detail-text", content: "Loading…", width: "100%", fg: C.text,
@@ -227,6 +211,17 @@ export class TuiApp {
     });
     this.main.add(this.list); this.main.add(this.detail);
 
+    [this.issuesTab, this.issuesTabText] = this.makePaneTab("issues");
+    [this.detailTab, this.detailTabText] = this.makePaneTab("detail");
+    this.paneTabs = new BoxRenderable(renderer, {
+      id: "tui-pane-tabs", width: "100%", height: 1, flexDirection: "row", backgroundColor: C.panel,
+    });
+    this.paneTabs.add(this.issuesTab); this.paneTabs.add(this.detailTab);
+    this.workspace = new BoxRenderable(renderer, {
+      id: "tui-workspace", width: "100%", flexGrow: 1, flexDirection: "column", backgroundColor: C.base,
+    });
+    this.workspace.add(this.paneTabs); this.workspace.add(this.main);
+
     this.footer = new TextRenderable(renderer, {
       id: "tui-footer", height: 1, fg: C.secondary, selectable: false, content: "",
     });
@@ -234,14 +229,20 @@ export class TuiApp {
       id: "tui-root", width: "100%", height: "100%", padding: 1, flexDirection: "column",
       backgroundColor: C.base, gap: 1,
     });
-    this.root.add(this.status); this.root.add(this.controls); this.root.add(this.main); this.root.add(this.footer);
+    this.root.add(this.status); this.root.add(this.controls); this.root.add(this.workspace); this.root.add(this.footer);
 
-    this.list.on(SelectRenderableEvents.SELECTION_CHANGED, (_index: number, option: SelectOption | null) => {
-      if (!this.reconcilingIssues) this.showIssue(option?.value as TuiIssue | undefined);
+    this.list.on(IssueListEvents.SELECTION_CHANGED, (_index: number, issue: TuiIssue | undefined) => {
+      if (!this.reconcilingIssues) this.showIssue(issue);
     });
-    this.list.on(RenderableEvents.FOCUSED, () => { this.lastContentFocus = this.list; this.updateFooter(); });
+    this.list.on(RenderableEvents.FOCUSED, () => {
+      this.activePane = "issues"; this.applyPaneVisibility();
+      this.lastContentFocus = this.list; this.updatePaneTabs(); this.updateFooter();
+    });
     this.list.on(RenderableEvents.BLURRED, () => this.updateFooter());
-    this.detail.on(RenderableEvents.FOCUSED, () => { this.lastContentFocus = this.detail; this.updateFooter(); });
+    this.detail.on(RenderableEvents.FOCUSED, () => {
+      this.activePane = "detail"; this.applyPaneVisibility();
+      this.lastContentFocus = this.detail; this.updatePaneTabs(); this.updateFooter();
+    });
     this.detail.on(RenderableEvents.BLURRED, () => this.updateFooter());
     this.renderer.keyInput.on("keypress", (key) => this.handleGlobalKey(key));
     this.renderer.on(CliRenderEvents.RESIZE, () => this.applyLayout());
@@ -268,20 +269,21 @@ export class TuiApp {
       const issues = await this.store.load(query);
       if (generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
       const state = this.store.ready(issues);
-      const currentId = (this.list.getSelectedOption()?.value as TuiIssue | undefined)?.identifier;
-      const previousIndex = currentId ? state.issues.findIndex((issue) => issue.identifier === currentId) : 0;
-      const selectedIndex = Math.max(0, previousIndex);
+      const currentId = this.list.getSelectedIssue()?.identifier;
+      const selectedId = currentId && state.issues.some((issue) => issue.identifier === currentId)
+        ? currentId
+        : undefined;
       this.reconcilingIssues = true;
-      this.list.options = issueOptions(state.issues);
-      if (state.issues.length > 0) this.list.setSelectedIndex(selectedIndex);
+      this.list.setIssues(state.issues, this.groupMode, selectedId);
       this.reconcilingIssues = false;
-      this.showIssue(state.issues[selectedIndex]);
+      this.showIssue(this.list.getSelectedIssue());
       if (state.issues.length === 0) {
         this.status.content = "No matching open issues are assigned to you.";
         this.detailText.content = "No issues match these session filters.";
       } else {
         this.status.content = `Showing ${state.issues.length} open issue${state.issues.length === 1 ? "" : "s"} assigned to you`;
       }
+      this.updatePaneTabs();
     } catch (error) {
       if (generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
       const state = this.store.error(error);
@@ -389,6 +391,35 @@ export class TuiApp {
     chip.add(text); return [chip, text];
   }
 
+  private makeGroupChip(): [BoxRenderable, TextRenderable] {
+    const text = new TextRenderable(this.renderer, {
+      id: "tui-group-text", content: "", fg: C.text, selectable: false,
+    });
+    const chip = new BoxRenderable(this.renderer, {
+      id: "tui-group-chip", width: "18%", height: 3, paddingX: 1, border: true,
+      borderColor: C.border, focusedBorderColor: C.accent, backgroundColor: C.surface0, focusable: true,
+      onMouseDown: (event) => { this.toggleGrouping(); event.preventDefault(); },
+      onMouseOver: () => this.renderer.setMousePointer("pointer"),
+      onMouseOut: () => this.renderer.setMousePointer("default"),
+    });
+    chip.add(text); return [chip, text];
+  }
+
+  private makePaneTab(pane: "issues" | "detail"): [BoxRenderable, TextRenderable] {
+    const text = new TextRenderable(this.renderer, {
+      id: `tui-${pane}-tab-text`, content: pane === "issues" ? "Issues" : "Detail",
+      fg: C.secondary, selectable: false,
+    });
+    const tab = new BoxRenderable(this.renderer, {
+      id: `tui-${pane}-tab`, width: pane === "issues" ? "42%" : "58%", height: 1,
+      paddingX: 1, backgroundColor: C.panel,
+      onMouseDown: (event) => { this.activatePane(pane); event.preventDefault(); },
+      onMouseOver: () => this.renderer.setMousePointer("pointer"),
+      onMouseOut: () => this.renderer.setMousePointer("default"),
+    });
+    tab.add(text); return [tab, text];
+  }
+
   private pickerOptions(kind: PickerKind): SelectOption[] {
     if (kind === "team") return [
       { name: "All teams", description: "", value: null },
@@ -410,23 +441,40 @@ export class TuiApp {
     this.updateControls(); this.closePicker(); void this.refresh();
   }
 
+  private toggleGrouping(): void {
+    const selectedId = this.list.getSelectedIssue()?.identifier;
+    this.groupMode = this.groupMode === "status" ? "none" : "status";
+    this.list.setIssues(this.store.state.issues, this.groupMode, selectedId);
+    this.showIssue(this.list.getSelectedIssue());
+    this.updateControls();
+  }
+
+  private activatePane(pane: "issues" | "detail"): void {
+    this.activePane = pane;
+    this.applyPaneVisibility();
+    (pane === "issues" ? this.list : this.detail).focus();
+    this.updatePaneTabs();
+  }
+
   private applySearch(value: string): void {
     const title = value.trim();
-    if (title === this.appliedTitle) { this.list.focus(); return; }
-    this.appliedTitle = title; this.list.focus(); void this.refresh();
+    if (title === this.appliedTitle) { this.activatePane("issues"); return; }
+    this.appliedTitle = title; this.activatePane("issues"); void this.refresh();
   }
 
   private leaveSearch(): void {
     this.search.value = this.appliedTitle;
-    this.list.focus();
+    this.activatePane("issues");
   }
 
   private updateControls(): void {
     const team = this.options.meta.teams.find((item) => item.id === this.selectedTeamId);
     const project = this.options.meta.projects.find((item) => item.id === this.selectedProjectId);
-    this.teamText.content = `Team: ${clip(team?.key ?? "All", 15)}`;
-    this.projectText.content = `Project: ${clip(project?.name ?? "All", 18)}`;
-    this.sortText.content = `Sort: ${clip(TUI_SORT_LABELS[this.sort], 17)}`;
+    const narrow = this.renderer.terminalWidth < 80;
+    this.teamText.content = `${narrow ? "T" : "Team"}: ${clip(team?.key ?? "All", narrow ? 6 : 15)}`;
+    this.projectText.content = `${narrow ? "P" : "Project"}: ${clip(project?.name ?? "All", narrow ? 6 : 18)}`;
+    this.sortText.content = `${narrow ? "S" : "Sort"}: ${clip(TUI_SORT_LABELS[this.sort], narrow ? 7 : 17)}`;
+    this.groupText.content = `${narrow ? "G" : "Group"}: ${this.groupMode === "status" ? "Status" : "None"}`;
   }
 
   private showIssue(issue: TuiIssue | undefined): void {
@@ -434,6 +482,18 @@ export class TuiApp {
     this.detailText.content = issueDetail(issue);
     if (nextId !== this.detailIssueId) this.detail.scrollTo(0);
     this.detailIssueId = nextId;
+    this.updatePaneTabs();
+  }
+
+  private updatePaneTabs(): void {
+    const issueCount = this.store.state.issues.length;
+    this.issuesTabText.content = `Issues · ${issueCount}`;
+    this.detailTabText.content = this.detailIssueId ?? "Detail";
+    const issuesActive = this.activePane === "issues";
+    this.issuesTab.backgroundColor = issuesActive ? C.accent : C.panel;
+    this.detailTab.backgroundColor = issuesActive ? C.panel : C.accent;
+    this.issuesTabText.fg = issuesActive ? C.base : C.secondary;
+    this.detailTabText.fg = issuesActive ? C.secondary : C.base;
   }
 
   private handleGlobalKey(key: KeyEvent): void {
@@ -447,11 +507,14 @@ export class TuiApp {
       if ((key.name === "escape" || key.name === "esc")) { key.preventDefault(); this.leaveSearch(); }
       return;
     }
-    if (key.name === "tab") { key.preventDefault(); (this.detail.focused ? this.list : this.detail).focus(); return; }
+    if (key.name === "tab") {
+      key.preventDefault(); this.activatePane(this.activePane === "issues" ? "detail" : "issues"); return;
+    }
     if (key.name === "/") { key.preventDefault(); this.search.focus(); return; }
     if (key.name === "t") { key.preventDefault(); this.openPicker("team"); return; }
     if (key.name === "p") { key.preventDefault(); this.openPicker("project"); return; }
     if (key.name === "s") { key.preventDefault(); this.openPicker("sort"); return; }
+    if (key.name === "g") { key.preventDefault(); this.toggleGrouping(); return; }
     if (key.name === "q") { key.preventDefault(); this.quit(); return; }
     if (key.name === "r") { key.preventDefault(); void this.refresh(); return; }
     if (key.name === "pageup") {
@@ -469,17 +532,28 @@ export class TuiApp {
 
   private applyLayout(): void {
     const narrow = this.renderer.terminalWidth < 80;
-    this.controls.height = narrow ? 6 : 3;
+    const compact = this.renderer.terminalWidth < 56;
+    this.controls.height = compact ? 9 : narrow ? 6 : 3;
     this.controls.flexWrap = narrow ? "wrap" : "no-wrap";
-    this.teamChip.width = narrow ? "48%" : "20%";
-    this.projectChip.width = narrow ? "48%" : "24%";
-    this.sortChip.width = narrow ? "48%" : "25%";
-    this.search.width = narrow ? "48%" : "28%";
-    this.main.flexDirection = narrow ? "column" : "row";
-    this.list.width = narrow ? "100%" : "42%"; this.list.height = narrow ? "48%" : "100%";
-    this.detail.width = narrow ? "100%" : "58%"; this.detail.height = narrow ? "52%" : "100%";
-    this.detail.border = narrow ? ["top"] : ["left"];
-    this.updateFooter();
+    this.teamChip.width = compact ? "48%" : narrow ? "23%" : "16%";
+    this.projectChip.width = compact ? "48%" : narrow ? "23%" : "20%";
+    this.sortChip.width = compact ? "48%" : narrow ? "23%" : "21%";
+    this.groupChip.width = compact ? "48%" : narrow ? "23%" : "18%";
+    this.search.width = narrow ? "100%" : "21%";
+    this.main.flexDirection = "row";
+    this.list.width = narrow ? "100%" : "42%"; this.list.height = "100%";
+    this.detail.width = narrow ? "100%" : "58%"; this.detail.height = "100%";
+    this.issuesTab.width = narrow ? "50%" : "42%";
+    this.detailTab.width = narrow ? "50%" : "58%";
+    this.detail.border = narrow ? [] : ["left"];
+    this.applyPaneVisibility();
+    this.updateControls(); this.updatePaneTabs(); this.updateFooter();
+  }
+
+  private applyPaneVisibility(): void {
+    const narrow = this.renderer.terminalWidth < 80;
+    this.list.visible = !narrow || this.activePane === "issues";
+    this.detail.visible = !narrow || this.activePane === "detail";
   }
 
   private updateFooter(): void {
@@ -489,7 +563,9 @@ export class TuiApp {
     }
     const narrow = this.renderer.terminalWidth < 80;
     this.footer.content = narrow
-      ? "/ search · t team · p proj · s sort · r refresh · q quit"
-      : "tab pane · / search · t team · p project · s sort · r refresh · q quit";
+      ? (this.renderer.terminalWidth < 50
+        ? "tab · / · g · r refresh · q quit"
+        : "tab · / find · t/p/s · g group · r refresh · q quit")
+      : "tab pane · / search · t team · p project · s sort · g group · r refresh · q quit";
   }
 }
