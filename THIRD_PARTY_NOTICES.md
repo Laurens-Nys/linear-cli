@@ -2,6 +2,12 @@
 
 This distribution includes the following third-party software. The license texts below are copied from the installed packages used to build the binary. Identical texts shared by platform packages are included once.
 
+## Grok Night palette
+
+Copyright 2023-2026 SpaceXAI
+
+The Grok Night color values in `src/tui/theme.ts` are a modified and selected palette adaptation of xai-org/grok-build, licensed under Apache License 2.0. The Apache License 2.0 text appears below in the OpenTUI native asset: Wuffs section.
+
 ## TOON format
 
 MIT License

@@ -40,7 +40,7 @@ lin tui                  # browse my open assigned issues interactively
 
 ## Read-only terminal browser
 
-`lin tui` is the only interactive command. It opens a read-only list of open issues assigned to the authenticated viewer with a detail pane. Use the arrow keys or `j`/`k` to select an issue, click or scroll with the mouse, press `r` to refresh, and press `q` or Ctrl-C to quit. It must be run directly in an interactive terminal; use `lin ls` when piping output.
+`lin tui` is the only interactive command. It opens a read-only list of open issues assigned to the authenticated viewer with a detail pane. Its session-only Team and Project filters narrow that list, Sort switches between recently updated, recently created and priority, and title search runs against Linear when you press Enter. Escape leaves the search field without changing the applied search; clear the field and press Enter to remove it. Click any control or issue row, or use `t`, `p`, `s`, `/`, arrows and `j`/`k`; `Tab` switches panes, `r` refreshes, and `q` or Ctrl-C quits. Filters are never saved. It must be run directly in an interactive terminal; use `lin ls` when piping output.
 
 ## The output contract
 

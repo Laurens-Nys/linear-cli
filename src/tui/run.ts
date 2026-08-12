@@ -1,33 +1,79 @@
 import { CliRenderEvents, createCliRenderer, type CliRenderer, type CliRendererConfig } from "@opentui/core";
+import { isFresh, load as loadMeta, readCached, warm as warmMeta, type Meta } from "../cache.ts";
+import { EXIT, LinError } from "../out.ts";
 import { TuiApp } from "./app.ts";
-import { loadTuiIssues, TuiIssueStore } from "./data.ts";
+import { loadTuiIssues, TuiIssueStore, type TuiIssueQuery } from "./data.ts";
+import { GROK_NIGHT } from "./theme.ts";
+
+export interface RunTuiConfig {
+  limit: number;
+  team?: string;
+  noCache?: boolean;
+}
 
 export interface RunTuiOptions {
   createRenderer?: (config: CliRendererConfig) => Promise<CliRenderer>;
-  loadIssues?: typeof loadTuiIssues;
+  loadIssues?: (query: TuiIssueQuery) => ReturnType<typeof loadTuiIssues>;
+  loadMetadata?: () => Promise<Meta>;
+  refreshMetadata?: () => Promise<Meta>;
 }
 
-export async function runTui(limit: number, options: RunTuiOptions = {}): Promise<void> {
+function findTeam(meta: Meta, ref: string | undefined): Meta["teams"][number] | undefined {
+  if (!ref) return undefined;
+  const lower = ref.toLowerCase();
+  return meta.teams.find((team) => team.key.toLowerCase() === lower || team.name.toLowerCase() === lower);
+}
+
+export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}): Promise<void> {
   let renderer: CliRenderer | undefined;
   let finish = (): void => {};
-  const stopped = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
+  const stopped = new Promise<void>((resolve) => { finish = resolve; });
 
   try {
     renderer = await (options.createRenderer ?? createCliRenderer)({
-      exitOnCtrlC: false,
-      screenMode: "alternate-screen",
-      clearOnShutdown: true,
-      useMouse: true,
-      enableMouseMovement: true,
-      autoFocus: true,
-      backgroundColor: "#111113",
+      exitOnCtrlC: false, screenMode: "alternate-screen", clearOnShutdown: true,
+      useMouse: true, enableMouseMovement: true, autoFocus: true, backgroundColor: GROK_NIGHT.base,
     });
     renderer.once(CliRenderEvents.DESTROY, finish);
-    const loadIssues = options.loadIssues ?? loadTuiIssues;
-    const store = new TuiIssueStore(() => loadIssues(limit));
-    const app = new TuiApp(renderer, store, { onQuit: finish });
+    if (renderer.isDestroyed) return;
+    const pendingKeyHandler = (key: import("@opentui/core").KeyEvent): void => {
+      if ((key.ctrl && key.name === "c") || key.name === "q") {
+        key.preventDefault();
+        finish();
+      }
+    };
+    renderer.keyInput.on("keypress", pendingKeyHandler);
+    const customMetadataLoader = options.loadMetadata !== undefined;
+    const cachedBeforeLoad = customMetadataLoader || config.noCache ? null : readCached();
+    let meta = await Promise.race([
+      (options.loadMetadata?.() ?? loadMeta({ noCache: config.noCache })),
+      stopped.then(() => undefined),
+    ]);
+    if (!meta || renderer.isDestroyed) return;
+    let initialTeam = findTeam(meta, config.team);
+    const shouldRefreshMissingTeam = options.refreshMetadata !== undefined
+      || (!customMetadataLoader && cachedBeforeLoad !== null && isFresh(cachedBeforeLoad));
+    if (config.team && !initialTeam && shouldRefreshMissingTeam) {
+      meta = await Promise.race([
+        (options.refreshMetadata?.() ?? warmMeta()),
+        stopped.then(() => undefined),
+      ]);
+      if (!meta || renderer.isDestroyed) return;
+      initialTeam = findTeam(meta, config.team);
+    }
+    if (config.team && !initialTeam) {
+      throw new LinError(
+        EXIT.input,
+        `no team "${config.team}"`,
+        `teams: ${meta.teams.map((team) => team.key).join(", ")}`,
+      );
+    }
+    renderer.keyInput.off("keypress", pendingKeyHandler);
+    const issueLoader = options.loadIssues ?? loadTuiIssues;
+    const store = new TuiIssueStore(issueLoader);
+    const app = new TuiApp(renderer, store, {
+      limit: config.limit, meta, initialTeamId: initialTeam?.id, onQuit: finish,
+    });
     app.start();
     await stopped;
   } finally {

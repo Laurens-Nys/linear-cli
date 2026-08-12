@@ -1,5 +1,5 @@
 import { EXIT, LinError } from "../out.ts";
-import { defineCommand } from "../registry.ts";
+import { defineCommand, flagBool } from "../registry.ts";
 
 export function isInteractiveTerminal(
   stdin: Pick<NodeJS.ReadStream, "isTTY"> = process.stdin,
@@ -13,7 +13,7 @@ export const tuiCommand = defineCommand({
   group: "meta",
   summary: "browse my open issues in a read-only terminal interface",
   examples: ["lin tui", "lin tui --limit 25"],
-  async run({ config }) {
+  async run({ config, flags }) {
     if (!isInteractiveTerminal()) {
       throw new LinError(
         EXIT.input,
@@ -22,6 +22,6 @@ export const tuiCommand = defineCommand({
       );
     }
     const { runTui } = await import("../tui/run.ts");
-    await runTui(config.limit ?? 50);
+    await runTui({ limit: config.limit ?? 50, team: config.team, noCache: flagBool(flags, "no-cache") });
   },
 });

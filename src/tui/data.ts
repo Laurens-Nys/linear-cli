@@ -1,5 +1,15 @@
 import { gql } from "../client.ts";
 
+export type TuiSort = "updated" | "created" | "priority";
+
+export interface TuiIssueQuery {
+  limit: number;
+  teamId?: string;
+  projectId?: string;
+  title?: string;
+  sort: TuiSort;
+}
+
 export interface TuiIssue {
   identifier: string;
   title: string;
@@ -18,8 +28,20 @@ interface TuiIssuesResponse {
   issues: { nodes: TuiIssue[] };
 }
 
-export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: IssueFilter!) {
-  issues(first: $first, filter: $filter, sort: [{ updatedAt: { order: Descending } }]) {
+export const TUI_SORTS: Record<TuiSort, unknown> = {
+  updated: { updatedAt: { order: "Descending" } },
+  created: { createdAt: { order: "Descending" } },
+  priority: { priority: { order: "Ascending" } },
+};
+
+export const TUI_SORT_LABELS: Record<TuiSort, string> = {
+  updated: "Recently updated",
+  created: "Recently created",
+  priority: "Priority",
+};
+
+export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: IssueFilter!, $sort: [IssueSortInput!]) {
+  issues(first: $first, filter: $filter, sort: $sort) {
     nodes {
       identifier
       title
@@ -36,12 +58,20 @@ export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: Is
   }
 }`;
 
-export async function loadTuiIssues(limit: number): Promise<TuiIssue[]> {
-  const filter = {
+export function tuiIssueVariables(query: TuiIssueQuery): Record<string, unknown> {
+  const filter: Record<string, unknown> = {
     assignee: { isMe: { eq: true } },
     state: { type: { nin: ["completed", "canceled"] } },
   };
-  const data = await gql<TuiIssuesResponse>(TUI_ISSUES_DOCUMENT, { first: limit, filter });
+  if (query.teamId) filter["team"] = { id: { eq: query.teamId } };
+  if (query.projectId) filter["project"] = { id: { eq: query.projectId } };
+  const title = query.title?.trim();
+  if (title) filter["title"] = { containsIgnoreCase: title };
+  return { first: query.limit, filter, sort: [TUI_SORTS[query.sort]] };
+}
+
+export async function loadTuiIssues(query: TuiIssueQuery): Promise<TuiIssue[]> {
+  const data = await gql<TuiIssuesResponse>(TUI_ISSUES_DOCUMENT, tuiIssueVariables(query));
   return data.issues.nodes;
 }
 
@@ -53,20 +83,28 @@ export type TuiLoadState =
 export class TuiIssueStore {
   state: TuiLoadState = { kind: "loading", issues: [] };
 
-  constructor(private readonly loader: () => Promise<TuiIssue[]>) {}
+  constructor(private readonly loader: (query: TuiIssueQuery) => Promise<TuiIssue[]>) {}
 
-  async refresh(): Promise<TuiLoadState> {
-    const previous = this.state.issues;
-    this.state = { kind: "loading", issues: previous };
-    try {
-      this.state = { kind: "ready", issues: await this.loader() };
-    } catch (error) {
-      this.state = {
-        kind: "error",
-        issues: previous,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+  loading(): TuiLoadState {
+    this.state = { kind: "loading", issues: this.state.issues };
     return this.state;
+  }
+
+  ready(issues: TuiIssue[]): TuiLoadState {
+    this.state = { kind: "ready", issues };
+    return this.state;
+  }
+
+  error(error: unknown): TuiLoadState {
+    this.state = {
+      kind: "error",
+      issues: this.state.issues,
+      message: error instanceof Error ? error.message : String(error),
+    };
+    return this.state;
+  }
+
+  load(query: TuiIssueQuery): Promise<TuiIssue[]> {
+    return this.loader(query);
   }
 }
