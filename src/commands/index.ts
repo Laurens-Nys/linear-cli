@@ -9,6 +9,7 @@ import "./api.ts";
 import "./auth.ts";
 import "./cache-cmd.ts";
 import "./schema.ts";
+import "./tui.ts";
 
 // issue agent
 import "./issue.ts";

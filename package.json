@@ -11,6 +11,7 @@
     "build": "bun build --compile ./src/main.ts --outfile dist/lin"
   },
   "dependencies": {
+    "@opentui/core": "0.5.1",
     "@toon-format/toon": "^4.1.0"
   },
   "devDependencies": {

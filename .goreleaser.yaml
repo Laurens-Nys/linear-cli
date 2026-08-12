@@ -7,7 +7,8 @@ project_name: lin
 
 before:
   hooks:
-    - bun install --frozen-lockfile
+    # OpenTUI selects a native package for each Bun cross-compile target.
+    - bun install --frozen-lockfile --os="*" --cpu="*"
 
 builds:
   - id: lin
@@ -30,6 +31,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - THIRD_PARTY_NOTICES.md
 
 checksum:
   name_template: checksums.txt

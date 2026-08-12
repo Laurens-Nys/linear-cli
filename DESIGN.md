@@ -1,18 +1,18 @@
 # lin — design
 
-`lin` is a Linear CLI built for coding agents. It is agent-only: every output is designed to be read by a language model at the lowest token cost that still changes the caller's next move. Humans are welcome to read it too — TOON is YAML-adjacent — but no feature exists for interactive human use.
+`lin` is a Linear CLI built primarily for coding agents. Every noninteractive command is designed to be read by a language model at the lowest token cost that still changes the caller's next move. `lin tui` is the one explicit human-facing exception: an opt-in, read-only terminal browser for the authenticated viewer's open assigned issues.
 
 Settled decisions:
 
 - Binary name `lin`. TypeScript on Bun, compiled to a single binary. Repo `Laurens-Nys/linear-cli`, public, MIT.
 - Output is TOON (Token-Oriented Object Notation, spec v4.1) plus raw markdown for document bodies. There is no `--json` flag anywhere. The only JSON in the tool is `lin api`, which returns raw GraphQL responses.
-- One runtime dependency: `@toon-format/toon`. Dev dependency: `typescript` (for `tsc --noEmit`). Nothing else.
-- No interactivity: no prompts, no color, no ANSI, no spinners, no pagers, ever. Same output piped or not.
+- Runtime dependencies: `@toon-format/toon` for agent output and pinned `@opentui/core` for `lin tui`. Dev dependency: `typescript` (for `tsc --noEmit`).
+- No prompts, color, ANSI, spinners, or pagers in noninteractive commands. They produce the same output piped or not. Only an explicit `lin tui` invocation may take over an interactive terminal.
 - Coverage: first-class verbs for everything an individual contributor or agent touches; `lin api` + `lin schema` cover the long tail of Linear's 536-operation schema.
 
-## The four output shapes
+## The four noninteractive output shapes
 
-Every command returns one of four shapes. `src/out.ts` owns all four; commands never hand-roll output.
+Every noninteractive command returns one of four shapes. `src/out.ts` owns all four; commands never hand-roll output. The explicitly invoked `lin tui` is the only exception and lets OpenTUI control the interactive terminal.
 
 ### Shape 1 — lists are TOON tables
 
@@ -195,6 +195,7 @@ Naming trap, verified against the schema: the GraphQL mutation `projectUpdate` e
 
 | Command | Behavior | Output |
 |---|---|---|
+| `tui` | read-only browser for my open assigned issues; arrows or `j`/`k` select, mouse clicks and scroll work, `r` refreshes, `q` or Ctrl-C quits; requires interactive stdin and stdout | full-screen terminal interface |
 | `api [query]` | raw GraphQL. Query from arg or stdin. `--var k=v` (string), `--vars-json '{...}'`, `--paginate` (follows `pageInfo` on the single top-level connection), `--toon` re-encodes the response data as TOON | raw JSON `data` (or errors, exit 1) |
 | `schema [pattern]` | search the embedded SDL: prints matching type headers and field lines with 1 line of context; `--type <Name>` prints the full type block; `--full` dumps everything | SDL fragments |
 | `skill` | print an agent cheatsheet (SKILL.md shape) generated from the command registry at runtime — synopsis, flags, one example per command, the output contract, exit codes. `--install <dir>` writes `<dir>/SKILL.md` | markdown |

@@ -1,6 +1,6 @@
 # lin
 
-`lin` is a Linear CLI for coding agents. Every command prints TOON, a tabular format an LLM reads at a fraction of the token cost of JSON. It ships as one binary with no runtime to install, no config wizard, and no interactive mode.
+`lin` is a Linear CLI for coding agents. Noninteractive commands print TOON, a tabular format an LLM reads at a fraction of the token cost of JSON. It ships as one binary with no runtime to install or config wizard. An explicit `lin tui` command provides a read-only terminal browser; every other command keeps the same automation-safe output in terminals and pipes.
 
 ## Why TOON
 
@@ -35,11 +35,16 @@ lin auth                 # who the key is, which workspace, how much rate budget
 lin ls                   # my open issues, most recently updated first
 lin ENG-42               # a bare identifier is always issue view
 lin issue create --team ENG -t "Fix login redirect loop" --label Bug --assignee casey
+lin tui                  # browse my open assigned issues interactively
 ```
+
+## Read-only terminal browser
+
+`lin tui` is the only interactive command. It opens a read-only list of open issues assigned to the authenticated viewer with a detail pane. Use the arrow keys or `j`/`k` to select an issue, click or scroll with the mouse, press `r` to refresh, and press `q` or Ctrl-C to quit. It must be run directly in an interactive terminal; use `lin ls` when piping output.
 
 ## The output contract
 
-Four shapes, and every command returns one of them.
+Noninteractive commands return one of four shapes. `lin tui` owns the terminal only when explicitly invoked and does not use these output shapes.
 
 Lists are TOON tables. When a page is cut, the last line is a comment carrying the exact command that fetches the next one:
 
@@ -96,7 +101,7 @@ Full form is `lin <noun> <verb> [args] [flags]`. Top-level shortcuts cover the h
 | template | list, view |
 | customer | list, view, create, need add, need list |
 | inbox | read, archive |
-| meta | api, schema, auth, cache, skill, completions |
+| meta | api, schema, auth, cache, skill, completions, tui |
 
 `lin --help` prints every command your binary has, grouped by noun. `lin issue create -h` prints one command's arguments, flags and examples. `lin api` and `lin schema` reach the rest of Linear's API, the part no verb covers.
 

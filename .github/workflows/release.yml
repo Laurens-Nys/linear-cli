@@ -18,11 +18,11 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       # The GoReleaser action installs nothing but GoReleaser; the bun builder
       # shells out to whatever `bun` is on PATH.
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --os="*" --cpu="*"
 
       - uses: goreleaser/goreleaser-action@v7
         with:
