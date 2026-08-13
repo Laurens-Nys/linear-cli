@@ -3,6 +3,7 @@ import { isFresh, load as loadMeta, readCached, warm as warmMeta, type Meta } fr
 import { EXIT, LinError } from "../out.ts";
 import { TuiApp } from "./app.ts";
 import { loadTuiIssues, TuiIssueStore, type TuiIssueQuery } from "./data.ts";
+import { prepareNativeRenderer } from "./native.ts";
 
 export interface RunTuiConfig {
   limit: number;
@@ -29,10 +30,28 @@ export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}):
   const stopped = new Promise<void>((resolve) => { finish = resolve; });
 
   try {
-    renderer = await (options.createRenderer ?? createCliRenderer)({
+    const rendererConfig: CliRendererConfig = {
       exitOnCtrlC: false, screenMode: "alternate-screen", clearOnShutdown: true,
       useMouse: true, enableMouseMovement: true, autoFocus: true,
-    });
+    };
+    if (options.createRenderer) {
+      renderer = await options.createRenderer(rendererConfig);
+    } else {
+      await prepareNativeRenderer();
+      try {
+        renderer = await createCliRenderer(rendererConfig);
+      } catch (error) {
+        if (error instanceof LinError) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new LinError(
+          EXIT.api,
+          message,
+          /libopentui|\$bunfs|dlopen|Failed to initialize OpenTUI/i.test(message)
+            ? "Infisical's agent-proxy sandbox cannot dlopen the embedded native library; run lin tui outside the sandbox"
+            : undefined,
+        );
+      }
+    }
     renderer.once(CliRenderEvents.DESTROY, finish);
     if (renderer.isDestroyed) return;
     const pendingKeyHandler = (key: import("@opentui/core").KeyEvent): void => {
