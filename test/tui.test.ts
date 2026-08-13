@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { RGBA } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { Meta } from "../src/cache.ts";
-import { TuiApp, chipLabel, footerHint, visibleSelectOffset } from "../src/tui/app.ts";
+import { TuiApp, chipLabel, footerHint, openChipLabel, visibleSelectOffset } from "../src/tui/app.ts";
+import { linearAppUrl, openCommand } from "../src/tui/open.ts";
 import { groupIssuesByState, statusPresentation } from "../src/tui/issue-list.ts";
 import { issueDetail, renderMermaidForWidth } from "../src/tui/markdown.ts";
 import {
@@ -40,7 +41,9 @@ let box: Sandbox; let net: Mock;
 beforeEach(() => { box = sandbox(); net = mock([{ match: "LinTuiIssues", data: { issues: { nodes: issues } } }]); });
 afterEach(async () => { net.restore(); box.cleanup(); await Bun.sleep(25); });
 
-function appOptions(onQuit?: () => void) { return { limit: 25, meta, onQuit }; }
+function appOptions(onQuit?: () => void, extras: { openExternal?: (url: string) => Promise<void> | void } = {}) {
+  return { limit: 25, meta, onQuit, ...extras };
+}
 
 async function pressEscape(setup: Awaited<ReturnType<typeof createTestRenderer>>): Promise<void> {
   setup.mockInput.pressEscape();
@@ -596,8 +599,59 @@ describe("responsive controls", () => {
         if (width >= 80) {
           expect(frame).toContain("Project all");
           expect(frame).toContain("Sort updated");
+          expect(frame).toContain("Open ↗");
         }
       } finally { app.quit(); setup.renderer.destroy(); }
     }
+  });
+});
+
+describe("open in Linear", () => {
+  test("turns the https issue URL into Linear's desktop protocol", () => {
+    expect(linearAppUrl("https://linear.app/acme/issue/ENG-42")).toBe("linear://linear.app/acme/issue/ENG-42");
+    expect(linearAppUrl("HTTPS://linear.app/issue/ENG-123")).toBe("linear://linear.app/issue/ENG-123");
+    expect(openChipLabel(false)).toBe("Open ↗");
+    expect(openChipLabel(true)).toBe("↗");
+    expect(openCommand("darwin")).toEqual(["open"]);
+    expect(openCommand("linux")).toEqual(["xdg-open"]);
+    expect(openCommand("win32")).toEqual(["cmd", "/c", "start", ""]);
+  });
+
+  test("click and o open the shown issue, not the highlighted row", async () => {
+    const opened: string[] = [];
+    const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues),
+      appOptions(undefined, { openExternal: (url) => { opened.push(url); } }),
+    );
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
+      expect(app.openChip.visible).toBe(true);
+      await setup.mockMouse.click(app.openChip.screenX, app.openChip.screenY); await setup.flush();
+      expect(opened).toEqual(["linear://linear.app/x/ENG-42"]);
+      setup.mockInput.pressKey("j"); await setup.flush();
+      setup.mockInput.pressKey("o"); await setup.flush();
+      expect(opened).toEqual(["linear://linear.app/x/ENG-42", "linear://linear.app/x/ENG-42"]);
+      const second = app.list.findDescendantById("tui-issue-row-APP-4") as import("@opentui/core").Renderable;
+      await setup.mockMouse.click(second.screenX + 2, second.screenY); await setup.flush();
+      setup.mockInput.pressKey("o"); await setup.flush();
+      expect(opened.at(-1)).toBe("linear://linear.app/x/APP-4");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("a failed open lands in the footer", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues),
+      appOptions(undefined, { openExternal: () => { throw new Error("no handler"); } }),
+    );
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2);
+      app.openInLinear();
+      await setup.waitFor(() => app.footer.plainText.includes("Could not open Linear"));
+      expect(app.footer.plainText).toContain("no handler");
+    } finally { app.quit(); setup.renderer.destroy(); }
   });
 });

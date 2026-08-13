@@ -29,6 +29,7 @@ import {
 } from "./data.ts";
 import { IssueListEvents, IssueListRenderable } from "./issue-list.ts";
 import { issueDetail, issueMarkdownRenderNode } from "./markdown.ts";
+import { linearAppUrl, openExternalUrl } from "./open.ts";
 import { GROK_NIGHT as C, GROK_NIGHT_MARKDOWN } from "./theme.ts";
 
 export { issueDetail };
@@ -77,6 +78,7 @@ export interface TuiAppOptions {
   meta: Meta;
   initialTeamId?: string;
   onQuit?: () => void;
+  openExternal?: (url: string) => Promise<void> | void;
 }
 
 function clip(value: string, length: number): string {
@@ -92,6 +94,10 @@ export function chipLabel(kind: PickerKind, value: string, compact: boolean): st
   const title = kind === "team" ? "Team" : kind === "project" ? "Project" : "Sort";
   const max = compact ? 4 : kind === "project" ? 12 : 8;
   return `${title} ${clip(value, max)} ▾`;
+}
+
+export function openChipLabel(compact: boolean): string {
+  return compact ? "↗" : "Open ↗";
 }
 
 export function footerHint(listHidden: boolean, compact: boolean, searching = false): string {
@@ -121,9 +127,11 @@ export class TuiApp {
   readonly teamChip: BoxRenderable;
   readonly projectChip: BoxRenderable;
   readonly sortChip: BoxRenderable;
+  readonly openChip: BoxRenderable;
   readonly teamText: TextRenderable;
   readonly projectText: TextRenderable;
   readonly sortText: TextRenderable;
+  readonly openText: TextRenderable;
   readonly searchStatus: TextRenderable;
   readonly countText: TextRenderable;
   readonly search: BrowserInput;
@@ -185,6 +193,7 @@ export class TuiApp {
     [this.teamChip, this.teamText] = this.makeChip("team");
     [this.projectChip, this.projectText] = this.makeChip("project");
     [this.sortChip, this.sortText] = this.makeChip("sort");
+    [this.openChip, this.openText] = this.makeOpenChip();
     this.searchStatus = new TextRenderable(renderer, {
       id: "tui-search-status", content: "", fg: C.yellow, selectable: false,
     });
@@ -194,6 +203,7 @@ export class TuiApp {
     this.header.add(this.teamChip);
     this.header.add(this.projectChip);
     this.header.add(this.sortChip);
+    this.header.add(this.openChip);
     this.header.add(this.searchStatus);
     this.header.add(this.countText);
 
@@ -456,6 +466,19 @@ export class TuiApp {
     chip.add(text); return [chip, text];
   }
 
+  private makeOpenChip(): [BoxRenderable, TextRenderable] {
+    const text = new TextRenderable(this.renderer, {
+      id: "tui-open-text", content: openChipLabel(false), fg: C.blue, selectable: false,
+    });
+    const chip = new BoxRenderable(this.renderer, {
+      id: "tui-open-chip", height: 1, backgroundColor: C.surface0,
+      onMouseDown: (event) => { this.openInLinear(); event.preventDefault(); },
+      onMouseOver: () => this.renderer.setMousePointer("pointer"),
+      onMouseOut: () => this.renderer.setMousePointer("default"),
+    });
+    chip.add(text); return [chip, text];
+  }
+
   private pickerOptions(kind: PickerKind): SelectOption[] {
     if (kind === "team") return [
       { name: "All teams", description: "", value: null },
@@ -543,12 +566,16 @@ export class TuiApp {
     this.teamText.content = teamLabel;
     this.projectText.content = projectLabel;
     this.sortText.content = sortLabel;
+    const openLabel = openChipLabel(compact);
     this.teamChip.width = teamLabel.length;
     this.projectChip.width = projectLabel.length;
     this.sortChip.width = sortLabel.length;
+    this.openText.content = openLabel;
+    this.openChip.width = openLabel.length;
     this.teamChip.visible = !compact;
     this.projectChip.visible = !narrow;
     this.sortChip.visible = !narrow;
+    this.openChip.visible = Boolean(this.detailIssueId);
     this.searchStatus.content = searchLabel;
     this.searchStatus.visible = Boolean(this.appliedTitle) && !compact;
     const count = this.store.state.issues.length;
@@ -587,6 +614,30 @@ export class TuiApp {
     this.detail.title = nextId ?? "Detail";
     if (nextId !== this.detailIssueId) this.detail.scrollTo(0);
     this.detailIssueId = nextId;
+    this.openChip.visible = Boolean(nextId);
+  }
+
+  private shownIssue(): TuiIssue | undefined {
+    if (!this.detailIssueId) return undefined;
+    return this.store.state.issues.find((issue) => issue.identifier === this.detailIssueId);
+  }
+
+  openInLinear(): void {
+    const issue = this.shownIssue();
+    if (!issue) return;
+    const url = linearAppUrl(issue.url);
+    void Promise.resolve().then(() => (this.options.openExternal ?? openExternalUrl)(url)).then(() => {
+      if (this.stopped || this.renderer.isDestroyed) return;
+      if (this.errorMessage.startsWith("Could not open Linear")) {
+        this.errorMessage = "";
+        this.updateFooter();
+      }
+    }).catch((error) => {
+      if (this.stopped || this.renderer.isDestroyed) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.errorMessage = `Could not open Linear: ${message}`;
+      this.updateFooter();
+    });
   }
 
   private handleGlobalKey(key: KeyEvent): void {
@@ -621,6 +672,7 @@ export class TuiApp {
     if (key.name === "s") { key.preventDefault(); this.openPicker("sort"); return; }
     if (key.name === "q") { key.preventDefault(); this.quit(); return; }
     if (key.name === "r") { key.preventDefault(); void this.refresh(); return; }
+    if (key.name === "o") { key.preventDefault(); this.openInLinear(); return; }
     if (key.name === "pageup") {
       key.preventDefault();
       if (this.detail.focused) this.detail.scrollBy(-1, "viewport");
