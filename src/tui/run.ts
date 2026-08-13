@@ -3,7 +3,6 @@ import { isFresh, load as loadMeta, readCached, warm as warmMeta, type Meta } fr
 import { EXIT, LinError } from "../out.ts";
 import { TuiApp } from "./app.ts";
 import { loadTuiIssues, TuiIssueStore, type TuiIssueQuery } from "./data.ts";
-import { GROK_NIGHT } from "./theme.ts";
 
 export interface RunTuiConfig {
   limit: number;
@@ -32,7 +31,7 @@ export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}):
   try {
     renderer = await (options.createRenderer ?? createCliRenderer)({
       exitOnCtrlC: false, screenMode: "alternate-screen", clearOnShutdown: true,
-      useMouse: true, enableMouseMovement: true, autoFocus: true, backgroundColor: GROK_NIGHT.base,
+      useMouse: true, enableMouseMovement: true, autoFocus: true,
     });
     renderer.once(CliRenderEvents.DESTROY, finish);
     if (renderer.isDestroyed) return;

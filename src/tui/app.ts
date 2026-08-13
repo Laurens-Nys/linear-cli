@@ -219,7 +219,7 @@ export class TuiApp {
     searchModal.add(this.search);
     this.searchOverlay = new BoxRenderable(renderer, {
       id: "tui-search-overlay", position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
-      zIndex: 100, visible: false, backgroundColor: C.base, alignItems: "center", justifyContent: "center",
+      zIndex: 100, visible: false, backgroundColor: "transparent", alignItems: "center", justifyContent: "center",
       onMouseDown: (event) => {
         const inside = event.x >= searchModal.screenX && event.x < searchModal.screenX + searchModal.width
           && event.y >= searchModal.screenY && event.y < searchModal.screenY + searchModal.height;
@@ -236,14 +236,14 @@ export class TuiApp {
     this.detailMarkdown = new MarkdownRenderable(renderer, {
       id: "tui-detail-markdown", content: "Loading…", width: "100%",
       flexGrow: 0, flexShrink: 0,
-      syntaxStyle: this.syntaxStyle, fg: C.text, bg: C.base, conceal: true,
+      syntaxStyle: this.syntaxStyle, fg: C.text, conceal: true,
       internalBlockMode: "top-level",
       tableOptions: { style: "grid", widthMode: "full", cellPaddingX: 1, borderColor: C.border },
       renderNode: issueMarkdownRenderNode(renderer),
     });
     this.detail = new ScrollBoxRenderable(renderer, {
       id: "tui-detail", width: "58%", height: "100%", padding: 1, border: true, borderStyle: "single",
-      borderColor: C.border, focusedBorderColor: C.lavender, backgroundColor: C.base,
+      borderColor: C.border, focusedBorderColor: C.lavender, backgroundColor: "transparent",
       title: "Detail", titleColor: C.secondary,
       scrollY: true, focusable: true,
       onMouseDown: (event) => { this.detail.focus(); event.preventDefault(); },
@@ -254,7 +254,7 @@ export class TuiApp {
     this.detailMarkdown.on("resize", () => this.flushDetailMarkdown());
     this.renderer.on(CliRenderEvents.FRAME, () => this.flushDetailMarkdown());
     this.main = new BoxRenderable(renderer, {
-      id: "tui-main", width: "100%", flexGrow: 1, flexDirection: "row", gap: 1, backgroundColor: C.base,
+      id: "tui-main", width: "100%", flexGrow: 1, flexDirection: "row", gap: 1, backgroundColor: "transparent",
     });
     this.main.add(this.list); this.main.add(this.detail);
 
@@ -263,11 +263,11 @@ export class TuiApp {
     });
     this.root = new BoxRenderable(renderer, {
       id: "tui-root", width: "100%", height: "100%", flexDirection: "column",
-      backgroundColor: C.base,
+      backgroundColor: "transparent",
     });
     this.root.add(this.header); this.root.add(this.main); this.root.add(this.footer); this.root.add(this.searchOverlay);
 
-    this.list.on(IssueListEvents.SELECTION_CHANGED, (_index: number, issue: TuiIssue | undefined) => {
+    this.list.on(IssueListEvents.ITEM_ACTIVATED, (issue: TuiIssue | undefined) => {
       if (!this.reconcilingIssues) this.showIssue(issue);
     });
     this.list.on(IssueListEvents.ITEM_OPENED, () => this.openSelectedIssue());
@@ -314,7 +314,10 @@ export class TuiApp {
       this.reconcilingIssues = true;
       this.list.setIssues(state.issues, selectedId);
       this.reconcilingIssues = false;
-      this.showIssue(this.list.getSelectedIssue());
+      const openIssue = this.detailIssueId
+        ? state.issues.find((issue) => issue.identifier === this.detailIssueId)
+        : undefined;
+      this.showIssue(openIssue ?? this.list.getSelectedIssue());
       if (state.issues.length === 0) {
         this.countText.content = "0";
         this.setDetailMarkdown("No issues match this view.");
@@ -354,7 +357,7 @@ export class TuiApp {
     });
     const overlay = new BoxRenderable(this.renderer, {
       id: "tui-picker-overlay", position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
-      zIndex: 100, backgroundColor: C.base, alignItems: "center", justifyContent: "center",
+      zIndex: 100, backgroundColor: "transparent", alignItems: "center", justifyContent: "center",
       onMouseDown: (event) => {
         const inside = event.x >= modal.screenX && event.x < modal.screenX + modal.width
           && event.y >= modal.screenY && event.y < modal.screenY + modal.height;
@@ -632,7 +635,9 @@ export class TuiApp {
   }
 
   private openSelectedIssue(): void {
-    if (!this.list.getSelectedIssue()) return;
+    const issue = this.list.getSelectedIssue();
+    if (!issue) return;
+    this.showIssue(issue);
     this.listHidden = true;
     this.activePane = "detail";
     this.applyLayout();

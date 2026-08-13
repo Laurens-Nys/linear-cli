@@ -64,7 +64,7 @@ function date(value: string): string {
 }
 
 export const IssueListEvents = {
-  SELECTION_CHANGED: "issueSelectionChanged",
+  ITEM_ACTIVATED: "issueActivated",
   ITEM_OPENED: "issueOpened",
 } as const;
 
@@ -75,18 +75,12 @@ export class IssueListRenderable extends ScrollBoxRenderable {
 
   constructor(renderer: CliRenderer) {
     super(renderer, {
-      id: "tui-list", width: "42%", height: "100%", backgroundColor: C.base,
+      id: "tui-list", width: "42%", height: "100%", backgroundColor: "transparent",
       border: true, borderStyle: "single", borderColor: C.border, focusedBorderColor: C.lavender,
       title: "Issues", titleColor: C.secondary, padding: 1,
       scrollY: true, focusable: true, viewportCulling: true,
       verticalScrollbarOptions: { showArrows: false },
     });
-    this.onMouseScroll = (event) => {
-      if (event.scroll?.direction === "up") this.moveUp();
-      if (event.scroll?.direction === "down") this.moveDown();
-      this.focus();
-      event.preventDefault();
-    };
     this.onMouseOver = () => renderer.setMousePointer("pointer");
     this.onMouseOut = () => renderer.setMousePointer("default");
     this.on(RenderableEvents.FOCUSED, () => this.updateSelectionFill());
@@ -173,10 +167,11 @@ export class IssueListRenderable extends ScrollBoxRenderable {
     const presentation = statusPresentation(issue.state.type);
     const row = new BoxRenderable(this.ctx, {
       id: `tui-issue-row-${issue.identifier}`, width: "100%", height: 2,
-      flexDirection: "column", backgroundColor: C.base,
+      flexDirection: "column", backgroundColor: "transparent",
       onMouseDown: (event) => {
         this.setSelectedIndex(index);
         this.focus();
+        this.emit(IssueListEvents.ITEM_ACTIVATED, issue);
         event.preventDefault();
       },
     });
@@ -196,14 +191,13 @@ export class IssueListRenderable extends ScrollBoxRenderable {
   private selectionChanged(): void {
     this.updateSelectionFill();
     this.scrollSelectedIntoView();
-    this.emit(IssueListEvents.SELECTION_CHANGED, this.selectedIndex, this.getSelectedIssue());
   }
 
   private updateSelectionFill(): void {
     for (const [index, row] of this.issueRows) {
       row.backgroundColor = index === this.selectedIndex
         ? (this.focused ? C.surface2 : C.surface1)
-        : C.base;
+        : "transparent";
     }
   }
 

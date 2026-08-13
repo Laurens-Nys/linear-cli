@@ -124,6 +124,17 @@ describe("Grok Night", () => {
       peach: "#ff9e64",
     });
   });
+
+  test("the TUI canvas is transparent so the terminal color shows through", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2);
+      expect(app.root.backgroundColor.a).toBe(0);
+      expect(app.list.backgroundColor.a).toBe(0);
+      expect(app.detail.backgroundColor.a).toBe(0);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
 });
 
 describe("issue detail markdown", () => {
@@ -304,19 +315,52 @@ describe("filters, search, mouse, and focus", () => {
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
-  test("Tab and pane clicks switch focus; list wheel changes selection only", async () => {
+  test("Tab and pane clicks switch focus; list wheel scrolls without changing the open issue", async () => {
+    const many = Array.from({ length: 20 }, (_, index): TuiIssue => ({
+      ...issues[0]!, identifier: `ENG-${index + 1}`, title: `Issue ${index + 1}`,
+    }));
+    const setup = await createTestRenderer({ width: 110, height: 18, useMouse: true });
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => many), appOptions());
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === many.length); await setup.flush();
+      expect(app.list.focused).toBe(true);
+      setup.mockInput.pressTab(); expect(app.detail.focused).toBe(true);
+      await setup.mockMouse.click(app.list.screenX + 2, app.list.screenY + 1); expect(app.list.focused).toBe(true);
+      const selected = app.list.getSelectedIndex();
+      const detailTop = app.detail.scrollTop;
+      const listTop = app.list.scrollTop;
+      const openId = app.detail.title;
+      await setup.mockMouse.scroll(app.list.screenX + 2, app.list.screenY + 1, "down");
+      await setup.flush();
+      expect(app.list.getSelectedIndex()).toBe(selected);
+      expect(app.detail.title).toBe(openId);
+      expect(app.detail.scrollTop).toBe(detailTop);
+      expect(app.list.scrollTop).toBeGreaterThan(listTop);
+      await setup.mockMouse.click(app.detail.screenX + 2, app.detail.screenY + 2); expect(app.detail.focused).toBe(true);
+      await pressEscape(setup); expect(app.list.focused).toBe(true);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("j/k moves the highlight; click or Enter opens that issue", async () => {
     const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
     const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
-      expect(app.list.focused).toBe(true);
-      setup.mockInput.pressTab(); expect(app.detail.focused).toBe(true);
-      await setup.mockMouse.click(app.list.screenX + 2, app.list.screenY + 1); expect(app.list.focused).toBe(true);
-      const detailTop = app.detail.scrollTop;
-      await setup.mockMouse.scroll(app.list.screenX + 2, app.list.screenY + 1, "down");
-      expect(app.list.getSelectedIndex()).toBe(1); expect(app.detail.scrollTop).toBe(detailTop);
-      await setup.mockMouse.click(app.detail.screenX + 2, app.detail.screenY + 2); expect(app.detail.focused).toBe(true);
-      await pressEscape(setup); expect(app.list.focused).toBe(true);
+      expect(app.detail.title).toBe("ENG-42");
+      setup.mockInput.pressKey("j"); await setup.flush();
+      expect(app.list.getSelectedIndex()).toBe(1);
+      expect(app.detail.title).toBe("ENG-42");
+      const second = app.list.findDescendantById("tui-issue-row-APP-4") as import("@opentui/core").Renderable;
+      await setup.mockMouse.click(second.screenX + 2, second.screenY);
+      await setup.flush();
+      expect(app.detail.title).toBe("APP-4");
+      expect(app.list.visible).toBe(true);
+      setup.mockInput.pressKey("k"); await setup.flush();
+      expect(app.list.getSelectedIndex()).toBe(0);
+      expect(app.detail.title).toBe("APP-4");
+      setup.mockInput.pressEnter();
+      await setup.waitFor(() => !app.list.visible && app.detail.visible && app.detail.focused);
+      expect(app.detail.title).toBe("ENG-42");
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 });
