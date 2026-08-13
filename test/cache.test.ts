@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import {
   clear,
   isFresh,
@@ -182,6 +182,20 @@ describe("load", () => {
     try {
       writeCached(meta(box.env, new Date().toISOString()), box.env);
       await load({ noCache: true, env: box.env });
+      expect(stub.calls).toHaveLength(1);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("load still returns metadata when the cache cannot be written", async () => {
+    const box = sandbox();
+    const stub = mock([{ match: "LinWarm", data: WARM_DATA }]);
+    try {
+      writeFileSync(box.env.XDG_CACHE_HOME!, "not-a-directory");
+      const loaded = await load({ env: box.env });
+      expect(loaded.workspace.urlKey).toBe("acme");
       expect(stub.calls).toHaveLength(1);
     } finally {
       stub.restore();

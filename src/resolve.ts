@@ -4,8 +4,8 @@
 
 import {
   isFresh,
+  load,
   readCached,
-  warm,
   type CachedLabel,
   type CachedProject,
   type CachedState,
@@ -53,11 +53,11 @@ async function lookup<T>(
   const cached = options.noCache ? null : readCached(env);
   const usedCache = cached !== null && isFresh(cached);
 
-  let meta = usedCache ? (cached as Meta) : await warm(env);
+  let meta = usedCache ? (cached as Meta) : await load({ env, noCache: options.noCache });
   let selection = select(meta);
 
   if (selection.matches.length === 0 && usedCache) {
-    meta = await warm(env);
+    meta = await load({ env, noCache: true });
     selection = select(meta);
   }
 

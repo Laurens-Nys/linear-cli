@@ -1,5 +1,5 @@
 import { CliRenderEvents, createCliRenderer, type CliRenderer, type CliRendererConfig } from "@opentui/core";
-import { isFresh, load as loadMeta, readCached, warm as warmMeta, type Meta } from "../cache.ts";
+import { isFresh, load as loadMeta, readCached, type Meta } from "../cache.ts";
 import { EXIT, LinError } from "../out.ts";
 import { TuiApp } from "./app.ts";
 import { loadTuiIssues, TuiIssueStore, type TuiIssueQuery } from "./data.ts";
@@ -73,7 +73,7 @@ export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}):
       || (!customMetadataLoader && cachedBeforeLoad !== null && isFresh(cachedBeforeLoad));
     if (config.team && !initialTeam && shouldRefreshMissingTeam) {
       meta = await Promise.race([
-        (options.refreshMetadata?.() ?? warmMeta()),
+        (options.refreshMetadata?.() ?? loadMeta({ noCache: true })),
         stopped.then(() => undefined),
       ]);
       if (!meta || renderer.isDestroyed) return;

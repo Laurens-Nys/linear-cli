@@ -255,10 +255,15 @@ export function toMeta(data: WarmResponse, fingerprint: string, now: Date = new 
   };
 }
 
+/** Fetch every vocabulary in one request. Does not write the cache. */
+async function fetchMeta(env: NodeJS.ProcessEnv): Promise<Meta> {
+  const data = await gql<WarmResponse>(WARM_QUERY, undefined, { env });
+  return toMeta(data, keyFingerprint(env));
+}
+
 /** Refetch every vocabulary in one request and write it to disk. */
 export async function warm(env: NodeJS.ProcessEnv = process.env): Promise<Meta> {
-  const data = await gql<WarmResponse>(WARM_QUERY, undefined, { env });
-  const meta = toMeta(data, keyFingerprint(env));
+  const meta = await fetchMeta(env);
   writeCached(meta, env);
   return meta;
 }
@@ -276,5 +281,11 @@ export async function load(options: LoadOptions = {}): Promise<Meta> {
     const cached = readCached(env);
     if (cached && isFresh(cached)) return cached;
   }
-  return warm(env);
+  const meta = await fetchMeta(env);
+  try {
+    writeCached(meta, env);
+  } catch {
+    // Sandboxes such as Infisical agent-proxy deny ~/.cache; the fetch still stands.
+  }
+  return meta;
 }
