@@ -1,6 +1,7 @@
 import { gql } from "../client.ts";
 
 export type TuiSort = "updated" | "created" | "priority";
+export type TuiView = "all" | "started" | "unstarted" | "completed";
 export type TuiWorkflowStateType =
   | "triage"
   | "backlog"
@@ -16,6 +17,7 @@ export interface TuiIssueQuery {
   projectId?: string;
   title?: string;
   sort: TuiSort;
+  view: TuiView;
 }
 
 export interface TuiIssue {
@@ -48,6 +50,28 @@ export const TUI_SORT_LABELS: Record<TuiSort, string> = {
   priority: "Priority",
 };
 
+export const TUI_SORT_SHORT: Record<TuiSort, string> = {
+  updated: "updated",
+  created: "created",
+  priority: "priority",
+};
+
+export const TUI_VIEWS: TuiView[] = ["all", "started", "unstarted", "completed"];
+
+export const TUI_VIEW_LABELS: Record<TuiView, string> = {
+  all: "All",
+  started: "Started",
+  unstarted: "Todo",
+  completed: "Done",
+};
+
+export function tuiStateFilter(view: TuiView): Record<string, unknown> {
+  if (view === "completed") return { type: { eq: "completed" } };
+  if (view === "started") return { type: { eq: "started" } };
+  if (view === "unstarted") return { type: { in: ["unstarted", "backlog", "triage"] } };
+  return { type: { nin: ["completed", "canceled"] } };
+}
+
 export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: IssueFilter!, $sort: [IssueSortInput!]) {
   issues(first: $first, filter: $filter, sort: $sort) {
     nodes {
@@ -69,7 +93,7 @@ export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: Is
 export function tuiIssueVariables(query: TuiIssueQuery): Record<string, unknown> {
   const filter: Record<string, unknown> = {
     assignee: { isMe: { eq: true } },
-    state: { type: { nin: ["completed", "canceled"] } },
+    state: tuiStateFilter(query.view),
   };
   if (query.teamId) filter["team"] = { id: { eq: query.teamId } };
   if (query.projectId) filter["project"] = { id: { eq: query.projectId } };

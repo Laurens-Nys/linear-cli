@@ -103,6 +103,11 @@ export function commandsInGroup(group: string): CommandSpec[] {
   return allCommands().filter((command) => command.group === group);
 }
 
+/** A noun the user can type, e.g. `issue` in `lin issue --help`. */
+export function lookupGroup(name: string): string | undefined {
+  return allGroups().includes(name) ? name : undefined;
+}
+
 export function allAliases(): Map<string, string> {
   return new Map(aliases);
 }

@@ -11,7 +11,7 @@ export function isInteractiveTerminal(
 export const tuiCommand = defineCommand({
   name: "tui",
   group: "meta",
-  summary: "browse my open issues in a read-only terminal interface",
+  summary: "browse my assigned issues in a read-only terminal interface",
   examples: ["lin tui", "lin tui --limit 25"],
   async run({ config, flags }) {
     if (!isInteractiveTerminal()) {

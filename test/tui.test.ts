@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { RGBA } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { Meta } from "../src/cache.ts";
-import { TuiApp, visibleSelectOffset } from "../src/tui/app.ts";
-import { groupIssuesByStatus, statusPresentation } from "../src/tui/issue-list.ts";
+import { TuiApp, chipLabel, footerHint, visibleSelectOffset } from "../src/tui/app.ts";
+import { groupIssuesByState, statusPresentation } from "../src/tui/issue-list.ts";
+import { issueDetail, renderMermaidForWidth } from "../src/tui/markdown.ts";
 import {
-  loadTuiIssues, TuiIssueStore, tuiIssueVariables, TUI_SORTS,
+  loadTuiIssues, TuiIssueStore, tuiIssueVariables, tuiStateFilter, TUI_SORTS,
   type TuiIssue, type TuiIssueQuery,
 } from "../src/tui/data.ts";
 import { runTui } from "../src/tui/run.ts";
@@ -34,12 +35,18 @@ const meta: Meta = {
   ],
   users: [], workspaceLabels: [], templates: [],
 };
-const baseQuery: TuiIssueQuery = { limit: 25, sort: "updated" };
+const baseQuery: TuiIssueQuery = { limit: 25, sort: "updated", view: "all" };
 let box: Sandbox; let net: Mock;
 beforeEach(() => { box = sandbox(); net = mock([{ match: "LinTuiIssues", data: { issues: { nodes: issues } } }]); });
-afterEach(() => { net.restore(); box.cleanup(); });
+afterEach(async () => { net.restore(); box.cleanup(); await Bun.sleep(25); });
 
 function appOptions(onQuit?: () => void) { return { limit: 25, meta, onQuit }; }
+
+async function pressEscape(setup: Awaited<ReturnType<typeof createTestRenderer>>): Promise<void> {
+  setup.mockInput.pressEscape();
+  await Bun.sleep(40);
+  await setup.flush();
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -49,7 +56,7 @@ function deferred<T>() {
 
 describe("TUI issue data", () => {
   test("Mine/Open stay while team, project, and title compose", async () => {
-    await loadTuiIssues({ limit: 25, teamId: "team-eng", projectId: "project-rel", title: " login ", sort: "created" });
+    await loadTuiIssues({ limit: 25, teamId: "team-eng", projectId: "project-rel", title: " login ", sort: "created", view: "all" });
     expect(net.calls[0]?.document).toContain("state { name color type }");
     expect(net.calls[0]?.variables).toEqual({
       first: 25,
@@ -83,19 +90,27 @@ describe("Linear status presentation", () => {
     )).toEqual(["◌", "◍", "○", "◐", "✓", "×", "×"]);
   });
 
-  test("groups active work first and preserves server sort inside each group", () => {
+  test("groups by Linear state name and preserves server sort inside each group", () => {
     const input: TuiIssue[] = [
       { ...issues[1]!, identifier: "APP-1" },
-      { ...issues[0]!, identifier: "ENG-2" },
-      { ...issues[1]!, identifier: "APP-3" },
-      { ...issues[0]!, identifier: "ENG-4" },
+      { ...issues[0]!, identifier: "ENG-2", state: { name: "In Review", color: "#e0af68", type: "started" } },
+      { ...issues[0]!, identifier: "ENG-3" },
+      { ...issues[0]!, identifier: "ENG-4", state: { name: "In Review", color: "#e0af68", type: "started" } },
     ];
-    expect(groupIssuesByStatus(input).map((group) => ({
-      type: group.type, ids: group.issues.map((issue) => issue.identifier),
+    expect(groupIssuesByState(input).map((group) => ({
+      name: group.name, type: group.type, ids: group.issues.map((issue) => issue.identifier),
     }))).toEqual([
-      { type: "started", ids: ["ENG-2", "ENG-4"] },
-      { type: "unstarted", ids: ["APP-1", "APP-3"] },
+      { name: "In Progress", type: "started", ids: ["ENG-3"] },
+      { name: "In Review", type: "started", ids: ["ENG-2", "ENG-4"] },
+      { name: "Todo", type: "unstarted", ids: ["APP-1"] },
     ]);
+  });
+
+  test("view filters map onto Linear workflow types", () => {
+    expect(tuiStateFilter("all")).toEqual({ type: { nin: ["completed", "canceled"] } });
+    expect(tuiStateFilter("started")).toEqual({ type: { eq: "started" } });
+    expect(tuiStateFilter("unstarted")).toEqual({ type: { in: ["unstarted", "backlog", "triage"] } });
+    expect(tuiStateFilter("completed")).toEqual({ type: { eq: "completed" } });
   });
 });
 
@@ -104,10 +119,30 @@ describe("Grok Night", () => {
     expect(GROK_NIGHT).toEqual({
       base: "#0a0a0a", panel: "#141414", surface0: "#242424", surface1: "#2e2e33",
       surface2: "#363636", border: "#505058", muted: "#6c6c6c", secondary: "#a8a8a8",
-      text: "#e1e1e1", accent: "#c8c8c8", mauve: "#bb9af7", red: "#f7768e",
+      text: "#e1e1e1", accent: "#c8c8c8", lavender: "#8b9cb3", mauve: "#bb9af7", red: "#f7768e",
       green: "#9ece6a", yellow: "#e0af68", blue: "#7aa2f7", teal: "#1abc9c",
       peach: "#ff9e64",
     });
+  });
+});
+
+describe("issue detail markdown", () => {
+  test("shapes the selected issue as markdown with a raw description body", () => {
+    const rendered = issueDetail(issues[0]);
+    expect(rendered).toContain("# Fix login redirect");
+    expect(rendered).toContain("**ENG-42**");
+    expect(rendered).toContain("Users bounce.");
+    expect(rendered).toContain("https://linear.app/x/ENG-42");
+    expect(issueDetail(issues[1])).toContain("*No description.*");
+    expect(issueDetail(undefined)).toBe("Select an issue to view its details.");
+  });
+
+  test("renders mermaid as unicode boxes and rejects invalid source", () => {
+    const ascii = renderMermaidForWidth("graph LR\n  A --> B", 80);
+    expect(ascii).toContain("A");
+    expect(ascii).toContain("B");
+    expect(ascii).toMatch(/[┌─┐│└┘►]/);
+    expect(() => renderMermaidForWidth("not a diagram", 80)).toThrow();
   });
 });
 
@@ -127,6 +162,7 @@ describe("filters, search, mouse, and focus", () => {
       await setup.waitFor(() => queries.length === 2);
       expect(queries[1]?.teamId).toBe("team-app");
       expect(app.teamText.plainText).toContain("APP");
+      expect(app.teamText.plainText).toContain("Team");
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
@@ -136,12 +172,12 @@ describe("filters, search, mouse, and focus", () => {
     const app = new TuiApp(setup.renderer, new TuiIssueStore(async (query) => { queries.push(query); return issues; }), appOptions());
     try {
       app.start(); await setup.waitFor(() => queries.length === 1); await setup.flush();
-      await setup.mockMouse.click(app.projectChip.screenX + 2, app.projectChip.screenY + 1); await setup.flush();
+      await setup.mockMouse.click(app.projectChip.screenX + 2, app.projectChip.screenY); await setup.flush();
       let picker = app.root.findDescendantById("tui-picker-list") as import("@opentui/core").SelectRenderable;
       await setup.mockMouse.click(picker.screenX + 2, picker.screenY + 1); // Reliability, after All
       await setup.waitFor(() => queries.length === 2);
       expect(queries[1]?.projectId).toBe("project-rel");
-      await setup.mockMouse.click(app.sortChip.screenX + 2, app.sortChip.screenY + 1); await setup.flush();
+      await setup.mockMouse.click(app.sortChip.screenX + 2, app.sortChip.screenY); await setup.flush();
       picker = app.root.findDescendantById("tui-picker-list") as import("@opentui/core").SelectRenderable;
       await setup.mockMouse.click(picker.screenX + 2, picker.screenY + 2); // Priority
       await setup.waitFor(() => queries.length === 3);
@@ -156,7 +192,7 @@ describe("filters, search, mouse, and focus", () => {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       app.detail.focus();
       expect(app.detail.focused).toBe(true);
-      await setup.mockMouse.click(app.teamChip.screenX + 2, app.teamChip.screenY + 1); await setup.flush();
+      await setup.mockMouse.click(app.teamChip.screenX + 2, app.teamChip.screenY); await setup.flush();
       const input = app.root.findDescendantById("tui-picker-search") as import("@opentui/core").InputRenderable;
       const picker = app.root.findDescendantById("tui-picker-list") as import("@opentui/core").SelectRenderable & { selectionFill: string };
       picker.focus(); expect(picker.selectionFill).toBe(GROK_NIGHT.surface2);
@@ -176,6 +212,7 @@ describe("filters, search, mouse, and focus", () => {
       expect(app.search.value).toBe("qr"); expect(quits).toBe(0); expect(queries.length).toBe(1);
       setup.mockInput.pressEnter(); await setup.waitFor(() => queries.length === 2);
       expect(queries[1]?.title).toBe("qr"); expect(app.list.focused).toBe(true);
+      expect(app.searchStatus.plainText).toContain("/qr");
       setup.mockInput.pressKey("/"); await setup.flush(); expect(app.search.focused).toBe(true);
       await setup.mockInput.typeText(" changed");
       app.search.handleKeyPress({ name: "escape" } as import("@opentui/core").KeyEvent);
@@ -229,19 +266,21 @@ describe("filters, search, mouse, and focus", () => {
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
-  test("Group toggles locally while preserving the selected issue", async () => {
+  test("numbered view tabs refetch and invert the active tab", async () => {
     const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
-    let loads = 0;
-    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => { loads += 1; return [issues[1]!, issues[0]!]; }), appOptions());
+    const queries: TuiIssueQuery[] = [];
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async (query) => { queries.push(query); return issues; }), appOptions());
     try {
-      app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
-      expect(app.list.options.map((option) => (option.value as TuiIssue).identifier)).toEqual(["ENG-42", "APP-4"]);
-      expect(app.list.getSelectedIssue()?.identifier).toBe("ENG-42");
-      await setup.mockMouse.click(app.groupChip.screenX + 2, app.groupChip.screenY + 1); await setup.flush();
-      expect(app.list.options.map((option) => (option.value as TuiIssue).identifier)).toEqual(["APP-4", "ENG-42"]);
-      expect(app.list.getSelectedIssue()?.identifier).toBe("ENG-42");
-      expect(app.groupText.plainText).toContain("None");
-      expect(loads).toBe(1);
+      app.start(); await setup.waitFor(() => queries.length === 1); await setup.flush();
+      expect(app.viewTabs.all.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.accent))).toBe(true);
+      setup.mockInput.pressKey("2");
+      await setup.waitFor(() => queries.length === 2);
+      expect(queries[1]?.view).toBe("started");
+      expect(app.viewTabs.started.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.accent))).toBe(true);
+      expect(app.viewTabs.all.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.surface0))).toBe(true);
+      await setup.mockMouse.click(app.viewTabs.completed.screenX + 1, app.viewTabs.completed.screenY);
+      await setup.waitFor(() => queries.length === 3);
+      expect(queries[2]?.view).toBe("completed");
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
@@ -270,14 +309,14 @@ describe("filters, search, mouse, and focus", () => {
     const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
-      expect(app.issuesTab.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.accent))).toBe(true);
+      expect(app.list.focused).toBe(true);
       setup.mockInput.pressTab(); expect(app.detail.focused).toBe(true);
-      expect(app.detailTab.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.accent))).toBe(true);
       await setup.mockMouse.click(app.list.screenX + 2, app.list.screenY + 1); expect(app.list.focused).toBe(true);
       const detailTop = app.detail.scrollTop;
       await setup.mockMouse.scroll(app.list.screenX + 2, app.list.screenY + 1, "down");
       expect(app.list.getSelectedIndex()).toBe(1); expect(app.detail.scrollTop).toBe(detailTop);
       await setup.mockMouse.click(app.detail.screenX + 2, app.detail.screenY + 2); expect(app.detail.focused).toBe(true);
+      await pressEscape(setup); expect(app.list.focused).toBe(true);
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 });
@@ -376,6 +415,93 @@ describe("async continuity and lifecycle", () => {
 });
 
 describe("responsive controls", () => {
+  test("Enter opens an issue and Escape returns to the list", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
+      expect(app.list.visible).toBe(true); expect(app.detail.visible).toBe(true);
+      expect(app.list.focused).toBe(true);
+      expect(app.footer.plainText).toContain("/ search");
+      expect(app.footer.plainText).toContain("q quit");
+
+      setup.mockInput.pressEnter();
+      await setup.waitFor(() => !app.list.visible && app.detail.visible && app.detail.focused);
+      await setup.flush();
+      let frame = await setup.waitForFrame((value) => value.includes("Users bounce.") && !value.includes("IN PROGRESS · 1"));
+      expect(frame).toContain("Users bounce."); expect(frame).not.toContain("IN PROGRESS · 1");
+      expect(frame).not.toContain("z show");
+      expect(app.footer.plainText).toContain("esc back");
+
+      await pressEscape(setup);
+      await setup.waitFor(() => app.list.visible && app.detail.visible && app.list.focused);
+      frame = await setup.waitForFrame((value) => value.includes("IN PROGRESS · 1") && value.includes("Users bounce."));
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("Escape from the list does not quit", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    let quits = 0;
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions(() => { quits += 1; }));
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
+      await pressEscape(setup);
+      expect(quits).toBe(0);
+      expect(app.list.visible).toBe(true);
+      expect(app.list.focused).toBe(true);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("z still toggles the list without appearing in the chrome", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
+      setup.mockInput.pressKey("z"); await setup.flush();
+      expect(app.list.visible).toBe(false); expect(app.detail.focused).toBe(true);
+      expect(setup.captureCharFrame()).not.toContain("z show");
+      setup.mockInput.pressKey("z"); await setup.flush();
+      expect(app.list.visible).toBe(true);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("detail pane renders markdown headings, lists, and mermaid ASCII", async () => {
+    const rich: TuiIssue = {
+      ...issues[0]!,
+      description: "## Context\n\nUsers bounce.\n\n- stale cookie\n\n```mermaid\ngraph LR\n  A --> B\n```\n",
+    };
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => [rich]), appOptions());
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
+      setup.mockInput.pressEnter();
+      await setup.waitFor(() => !app.list.visible && app.detail.visible);
+      const frame = await setup.waitForFrame((value) =>
+        value.includes("Context") && value.includes("stale cookie") && /[┌─┐│└┘►]/.test(value),
+      );
+      expect(frame).toContain("Context");
+      expect(frame).not.toContain("## Context");
+      expect(frame).toContain("Users bounce.");
+      expect(frame).toContain("stale cookie");
+      expect(frame).toContain("A");
+      expect(frame).toContain("B");
+      expect(frame).toMatch(/[┌─┐│└┘►]/);
+      expect(frame).not.toContain("```mermaid");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("z is text in search and does not hide the list", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2);
+      setup.mockInput.pressKey("/"); await setup.mockInput.typeText("z");
+      expect(app.search.value).toBe("z");
+      expect(app.list.visible).toBe(true); expect(app.detail.visible).toBe(true);
+      app.search.handleKeyPress({ name: "escape" } as import("@opentui/core").KeyEvent);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
   test("narrow tabs switch between one visible pane at a time", async () => {
     const setup = await createTestRenderer({ width: 60, height: 28, useMouse: true });
     const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
@@ -384,12 +510,14 @@ describe("responsive controls", () => {
       let frame = setup.captureCharFrame();
       expect(app.list.visible).toBe(true); expect(app.detail.visible).toBe(false);
       expect(frame).toContain("IN PROGRESS · 1"); expect(frame).not.toContain("Users bounce.");
-      await setup.mockMouse.click(app.detailTab.screenX + 2, app.detailTab.screenY); await setup.flush();
-      frame = setup.captureCharFrame();
+      setup.mockInput.pressTab();
+      await setup.waitFor(() => !app.list.visible && app.detail.visible && app.detail.focused);
+      frame = await setup.waitForFrame((value) => value.includes("Users bounce.") && !value.includes("IN PROGRESS · 1"));
       expect(app.list.visible).toBe(false); expect(app.detail.visible).toBe(true);
       expect(app.detail.focused).toBe(true); expect(frame).toContain("Users bounce.");
       expect(frame).not.toContain("IN PROGRESS · 1");
-      setup.mockInput.pressTab(); await setup.flush();
+      setup.mockInput.pressTab();
+      await setup.waitFor(() => app.list.visible && !app.detail.visible && app.list.focused);
       expect(app.list.visible).toBe(true); expect(app.detail.visible).toBe(false); expect(app.list.focused).toBe(true);
       setup.mockInput.pressTab(); setup.mockInput.pressKey("/");
       app.search.handleKeyPress({ name: "escape" } as import("@opentui/core").KeyEvent); await setup.flush();
@@ -397,20 +525,34 @@ describe("responsive controls", () => {
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
-  test("wide and 60-column layouts keep chips, search, and footer usable", async () => {
+  test("header chips look like dropdowns and the footer lists hidden keys", async () => {
+    expect(chipLabel("team", "all", false)).toBe("Team all ▾");
+    expect(chipLabel("project", "Reliability", false)).toBe("Project Reliability ▾");
+    expect(chipLabel("sort", "updated", false)).toBe("Sort updated ▾");
+    expect(footerHint(false, false)).toBe("/ search  ·  r refresh  ·  q quit");
+    expect(footerHint(true, false)).toBe("esc back  ·  / search  ·  r refresh  ·  q quit");
+    expect(footerHint(false, true)).toBe("/ search  ·  q quit");
     for (const width of [110, 60, 40]) {
       const setup = await createTestRenderer({ width, height: 28 });
       const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
       try {
         app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
         const frame = setup.captureCharFrame();
-        expect(frame).toContain(width < 80 ? "T:" : "Team:");
-        expect(frame).toContain(width < 80 ? "P:" : "Project:");
-        expect(frame).toContain(width < 80 ? "S:" : "Sort:");
-        expect(frame).toContain(width < 80 ? "G: Status" : "Group: Status");
-        expect(frame).toContain("Search title");
-        expect(frame).toContain("r refresh");
+        expect(app.footer.plainText).toContain("/ search");
+        expect(app.footer.plainText).toContain("q quit");
+        expect(frame).toContain("/ search");
         expect(frame).toContain("q quit");
+        expect(frame).not.toContain("1-4 views");
+        if (width >= 80) expect(app.footer.plainText).toContain("r refresh");
+        if (width >= 56) {
+          expect(frame).toContain("All");
+          expect(frame).toContain("Started");
+          expect(frame).toContain("Team all");
+        }
+        if (width >= 80) {
+          expect(frame).toContain("Project all");
+          expect(frame).toContain("Sort updated");
+        }
       } finally { app.quit(); setup.renderer.destroy(); }
     }
   });

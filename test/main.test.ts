@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs, renderCommandHelp, renderGlobalHelp, run, VERSION } from "../src/main.ts";
+import { parseArgs, renderCommandHelp, renderGlobalHelp, renderGroupHelp, run, VERSION } from "../src/main.ts";
 import { EXIT } from "../src/out.ts";
 import { getCommand, GLOBAL_FLAGS, type FlagSpec } from "../src/registry.ts";
 import { captureStdout, mock, sandbox } from "./harness.ts";
@@ -110,6 +110,17 @@ describe("dispatch", () => {
     expect(captured.text()).toContain("lin cache warm —");
   });
 
+  test("a one-word command that shares a group name still shows its own help", async () => {
+    const captured = captureStdout();
+    const code = await run(["comment", "--help"]);
+    captured.restore();
+    expect(code).toBe(EXIT.ok);
+    const help = captured.text();
+    expect(help).toContain("lin comment — list an issue's comments");
+    expect(help).toContain("usage: lin comment <issue>");
+    expect(help).not.toContain("comment add");
+  });
+
   test("-h on a command shows its own flags and examples", async () => {
     const captured = captureStdout();
     await run(["schema", "-h"]);
@@ -118,6 +129,37 @@ describe("dispatch", () => {
     expect(help).toContain("lin schema —");
     expect(help).toContain("--type Name");
     expect(help).toContain("lin schema issueUpdate");
+  });
+
+  test("a noun with -h lists that noun's commands", async () => {
+    for (const flag of ["-h", "--help"] as const) {
+      const captured = captureStdout();
+      const code = await run(["issue", flag]);
+      captured.restore();
+      expect(code).toBe(EXIT.ok);
+      const help = captured.text();
+      expect(help).toContain("lin issue");
+      expect(help).toContain("issue list");
+      expect(help).toContain("issue view");
+      expect(help).toContain("issue create");
+      expect(help).toContain("react");
+      expect(help).not.toContain("project list");
+    }
+  });
+
+  test("a bare noun prints the same group help", async () => {
+    const captured = captureStdout();
+    const code = await run(["project"]);
+    captured.restore();
+    expect(code).toBe(EXIT.ok);
+    expect(captured.text()).toBe(renderGroupHelp("project") + "\n");
+  });
+
+  test("an unknown verb under a known noun lists that noun's commands", async () => {
+    await expect(run(["issue", "frobnicate"])).rejects.toMatchObject({
+      exitCode: EXIT.input,
+      hint: expect.stringContaining("issue list"),
+    });
   });
 
   test("a bare identifier routes to issue view", async () => {
@@ -182,6 +224,17 @@ describe("help rendering comes from the registry", () => {
     for (const example of (command as NonNullable<typeof command>).examples) {
       expect(help).toContain(example);
     }
+  });
+
+  test("group help lists every command in that noun", async () => {
+    const { commandsInGroup } = await import("../src/registry.ts");
+    const help = renderGroupHelp("issue");
+    expect(help).toContain("usage: lin issue <verb>");
+    for (const command of commandsInGroup("issue")) {
+      expect(help).toContain(command.name);
+      expect(help).toContain(command.summary);
+    }
+    expect(help).not.toContain("project list");
   });
 
   test("every registered command carries a summary and at least one example", async () => {

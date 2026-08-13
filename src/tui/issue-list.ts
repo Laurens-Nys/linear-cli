@@ -12,22 +12,19 @@ import {
 import type { TuiIssue, TuiWorkflowStateType } from "./data.ts";
 import { GROK_NIGHT as C } from "./theme.ts";
 
-export type TuiGroupMode = "status" | "none";
-
 export interface StatusPresentation {
   glyph: string;
-  group: string;
   fallbackColor: string;
 }
 
 const STATUS_PRESENTATION: Record<TuiWorkflowStateType, StatusPresentation> = {
-  started: { glyph: "◐", group: "IN PROGRESS", fallbackColor: C.yellow },
-  unstarted: { glyph: "○", group: "TODO", fallbackColor: C.secondary },
-  backlog: { glyph: "◍", group: "BACKLOG", fallbackColor: C.muted },
-  triage: { glyph: "◌", group: "TRIAGE", fallbackColor: C.teal },
-  completed: { glyph: "✓", group: "COMPLETED", fallbackColor: C.green },
-  canceled: { glyph: "×", group: "CANCELED", fallbackColor: C.red },
-  duplicate: { glyph: "×", group: "DUPLICATE", fallbackColor: C.muted },
+  started: { glyph: "◐", fallbackColor: C.yellow },
+  unstarted: { glyph: "○", fallbackColor: C.secondary },
+  backlog: { glyph: "◍", fallbackColor: C.muted },
+  triage: { glyph: "◌", fallbackColor: C.teal },
+  completed: { glyph: "✓", fallbackColor: C.green },
+  canceled: { glyph: "×", fallbackColor: C.red },
+  duplicate: { glyph: "×", fallbackColor: C.muted },
 };
 
 const STATUS_ORDER: TuiWorkflowStateType[] = [
@@ -38,9 +35,28 @@ export function statusPresentation(type: TuiWorkflowStateType): StatusPresentati
   return STATUS_PRESENTATION[type];
 }
 
-export function groupIssuesByStatus(issues: readonly TuiIssue[]): { type: TuiWorkflowStateType; issues: TuiIssue[] }[] {
-  return STATUS_ORDER.map((type) => ({ type, issues: issues.filter((issue) => issue.state.type === type) }))
-    .filter((group) => group.issues.length > 0);
+export interface StateGroup {
+  name: string;
+  type: TuiWorkflowStateType;
+  issues: TuiIssue[];
+}
+
+export function groupIssuesByState(issues: readonly TuiIssue[]): StateGroup[] {
+  const groups: StateGroup[] = [];
+  const indexByName = new Map<string, number>();
+  for (const issue of issues) {
+    const existing = indexByName.get(issue.state.name);
+    if (existing !== undefined) {
+      groups[existing]!.issues.push(issue);
+      continue;
+    }
+    indexByName.set(issue.state.name, groups.length);
+    groups.push({ name: issue.state.name, type: issue.state.type, issues: [issue] });
+  }
+  return groups.sort((a, b) => {
+    const typeDelta = STATUS_ORDER.indexOf(a.type) - STATUS_ORDER.indexOf(b.type);
+    return typeDelta !== 0 ? typeDelta : a.name.localeCompare(b.name);
+  });
 }
 
 function date(value: string): string {
@@ -49,6 +65,7 @@ function date(value: string): string {
 
 export const IssueListEvents = {
   SELECTION_CHANGED: "issueSelectionChanged",
+  ITEM_OPENED: "issueOpened",
 } as const;
 
 export class IssueListRenderable extends ScrollBoxRenderable {
@@ -58,7 +75,9 @@ export class IssueListRenderable extends ScrollBoxRenderable {
 
   constructor(renderer: CliRenderer) {
     super(renderer, {
-      id: "tui-list", width: "42%", height: "100%", backgroundColor: C.panel,
+      id: "tui-list", width: "42%", height: "100%", backgroundColor: C.base,
+      border: true, borderStyle: "single", borderColor: C.border, focusedBorderColor: C.lavender,
+      title: "Issues", titleColor: C.secondary, padding: 1,
       scrollY: true, focusable: true, viewportCulling: true,
       verticalScrollbarOptions: { showArrows: false },
     });
@@ -82,30 +101,25 @@ export class IssueListRenderable extends ScrollBoxRenderable {
     }));
   }
 
-  setIssues(issues: readonly TuiIssue[], groupMode: TuiGroupMode, selectedIdentifier?: string): void {
+  setIssues(issues: readonly TuiIssue[], selectedIdentifier?: string): void {
     for (const child of [...this.getChildren()]) child.destroyRecursively();
     this.issueRows.clear();
-    const groups = groupIssuesByStatus(issues);
-    this.issues = groupMode === "status" ? groups.flatMap((group) => group.issues) : [...issues];
+    const groups = groupIssuesByState(issues);
+    this.issues = groups.flatMap((group) => group.issues);
     const selected = selectedIdentifier
       ? this.issues.findIndex((issue) => issue.identifier === selectedIdentifier)
       : 0;
     this.selectedIndex = Math.max(0, selected);
 
-    if (groupMode === "status") {
-      let index = 0;
-      for (const group of groups) {
-        const presentation = statusPresentation(group.type);
-        const heading = new TextRenderable(this.ctx, {
-          id: `tui-status-group-${group.type}`, width: "100%", height: 1,
-          content: `${presentation.group} · ${group.issues.length}`, fg: C.secondary, selectable: false,
-          onMouseDown: (event) => { this.focus(); event.preventDefault(); },
-        });
-        this.add(heading);
-        for (const issue of group.issues) this.addIssueRow(issue, index++);
-      }
-    } else {
-      for (const [index, issue] of this.issues.entries()) this.addIssueRow(issue, index);
+    let index = 0;
+    for (const group of groups) {
+      const heading = new TextRenderable(this.ctx, {
+        id: `tui-status-group-${group.name}`, width: "100%", height: 1,
+        content: `${group.name.toUpperCase()} · ${group.issues.length}`, fg: C.secondary, selectable: false,
+        onMouseDown: (event) => { this.focus(); event.preventDefault(); },
+      });
+      this.add(heading);
+      for (const issue of group.issues) this.addIssueRow(issue, index++);
     }
 
     this.scrollTo(0);
@@ -145,6 +159,13 @@ export class IssueListRenderable extends ScrollBoxRenderable {
   override handleKeyPress(key: KeyEvent): boolean {
     if (key.name === "up" || key.name === "k") { this.moveUp(); return true; }
     if (key.name === "down" || key.name === "j") { this.moveDown(); return true; }
+    if (key.name === "return" || key.name === "enter") {
+      if (this.getSelectedIssue()) {
+        key.preventDefault();
+        this.emit(IssueListEvents.ITEM_OPENED, this.getSelectedIssue());
+        return true;
+      }
+    }
     return super.handleKeyPress(key);
   }
 
@@ -152,7 +173,7 @@ export class IssueListRenderable extends ScrollBoxRenderable {
     const presentation = statusPresentation(issue.state.type);
     const row = new BoxRenderable(this.ctx, {
       id: `tui-issue-row-${issue.identifier}`, width: "100%", height: 2,
-      flexDirection: "column", backgroundColor: C.panel,
+      flexDirection: "column", backgroundColor: C.base,
       onMouseDown: (event) => {
         this.setSelectedIndex(index);
         this.focus();
@@ -182,7 +203,7 @@ export class IssueListRenderable extends ScrollBoxRenderable {
     for (const [index, row] of this.issueRows) {
       row.backgroundColor = index === this.selectedIndex
         ? (this.focused ? C.surface2 : C.surface1)
-        : C.panel;
+        : C.base;
     }
   }
 

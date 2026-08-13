@@ -22,7 +22,7 @@ describe("tui command", () => {
   test("is registered and documented through the command registry", () => {
     const command = getCommand("tui");
     expect(command).toBeDefined();
-    expect(renderCommandHelp(command!)).toContain("lin tui — browse my open issues");
+    expect(renderCommandHelp(command!)).toContain("lin tui — browse my assigned issues");
     expect(renderCommandHelp(command!)).toContain("lin tui --limit 25");
   });
 

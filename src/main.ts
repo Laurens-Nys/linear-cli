@@ -12,6 +12,7 @@ import {
   GLOBAL_FLAGS,
   knownNames,
   lookupCommand,
+  lookupGroup,
   type CommandSpec,
   type FlagSpec,
   type Flags,
@@ -183,7 +184,34 @@ export function renderGlobalHelp(): string {
 
   out.push("", "global flags", ...flagLines(GLOBAL_FLAGS));
   out.push("", "lin ENG-42 is shorthand for lin issue view ENG-42");
+  out.push("run lin <noun> -h for that noun's commands");
   out.push("run lin <command> -h for arguments and examples");
+  return out.join("\n");
+}
+
+export function renderGroupHelp(group: string): string {
+  const commands = commandsInGroup(group);
+  const width = Math.max(...commands.map((command) => command.name.length));
+  const prefix = `${group} `;
+  const hasNounCommands = commands.some((command) => command.name === group || command.name.startsWith(prefix));
+  const out: string[] = [
+    `lin ${group}`,
+    "",
+    hasNounCommands ? `usage: lin ${group} <verb> [args] [flags]` : "usage: lin <command> [args] [flags]",
+    "",
+    "commands",
+  ];
+  for (const command of commands) {
+    const aliases = command.aliases?.length ? ` (${command.aliases.join(", ")})` : "";
+    out.push(`  ${pad(command.name, width)}  ${command.summary}${aliases}`);
+  }
+  out.push("", "global flags", ...flagLines(GLOBAL_FLAGS));
+  out.push(
+    "",
+    hasNounCommands
+      ? `run lin ${group} <verb> -h for arguments and examples`
+      : "run lin <command> -h for arguments and examples",
+  );
   return out.join("\n");
 }
 
@@ -250,6 +278,19 @@ export async function run(argv: readonly string[]): Promise<ExitCode> {
 
   const found = lookupCommand(tokens);
   if (!found) {
+    const group = lookupGroup(first);
+    if (group) {
+      const rest = tokens[1];
+      if (rest === undefined || rest === "-h" || rest === "--help") {
+        line(renderGroupHelp(group));
+        return EXIT.ok;
+      }
+      throw new LinError(
+        EXIT.input,
+        `unknown command "${tokens.slice(0, 2).join(" ")}"`,
+        `commands: ${commandsInGroup(group).map((command) => command.name).join(", ")}`,
+      );
+    }
     throw new LinError(EXIT.input, `unknown command "${tokens.slice(0, 2).join(" ")}"`, suggest(first));
   }
 

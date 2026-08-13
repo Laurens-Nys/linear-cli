@@ -35,12 +35,12 @@ lin auth                 # who the key is, which workspace, how much rate budget
 lin ls                   # my open issues, most recently updated first
 lin ENG-42               # a bare identifier is always issue view
 lin issue create --team ENG -t "Fix login redirect loop" --label Bug --assignee casey
-lin tui                  # browse my open assigned issues interactively
+lin tui                  # browse my assigned issues interactively
 ```
 
 ## Read-only terminal browser
 
-`lin tui` is the only interactive command. It opens a read-only list of open issues assigned to the authenticated viewer with a detail pane. Linear-colored status icons identify each issue, and issues are grouped by workflow category by default while preserving the chosen sort inside each group. Its session-only Team and Project filters narrow that list, Sort switches between recently updated, recently created and priority, Group toggles status grouping, and title search runs against Linear when you press Enter. Filled pane headers show focus; narrow terminals show one pane at a time as clickable Issues and Detail tabs. Escape leaves the search field without changing the applied search; clear the field and press Enter to remove it. Click any control, tab, or issue row, or use `t`, `p`, `s`, `g`, `/`, arrows and `j`/`k`; `Tab` switches panes, `r` refreshes, and `q` or Ctrl-C quits. Filters, grouping, and layout are never saved. It must be run directly in an interactive terminal; use `lin ls` when piping output.
+`lin tui` is the only interactive command. It opens a read-only list of issues assigned to the authenticated viewer with a detail pane. View tabs switch between All (open), Started, Todo, and Done. Linear-colored status icons identify each issue, and the list is grouped by the team's actual state names (In Progress, In Review, Todo, and so on) while preserving the chosen sort inside each group. The detail pane renders the issue description as markdown (headings, lists, tables, fenced code) and turns `mermaid` fences into width-aware ASCII diagrams. Click Team, Project, or Sort in the header to narrow or reorder the list. Enter opens the selected issue; Escape returns to the list. `/` searches titles against Linear. The footer lists the keys that are not on screen: search, refresh, and quit. Narrow terminals show one pane at a time. Filters, view, and layout are never saved. It must be run directly in an interactive terminal; use `lin ls` when piping output.
 
 ## The output contract
 
@@ -103,7 +103,7 @@ Full form is `lin <noun> <verb> [args] [flags]`. Top-level shortcuts cover the h
 | inbox | read, archive |
 | meta | api, schema, auth, cache, skill, completions, tui |
 
-`lin --help` prints every command your binary has, grouped by noun. `lin issue create -h` prints one command's arguments, flags and examples. `lin api` and `lin schema` reach the rest of Linear's API, the part no verb covers.
+`lin --help` prints every command your binary has, grouped by noun. `lin issue --help` prints that noun's commands. `lin issue create -h` prints one command's arguments, flags and examples. `lin api` and `lin schema` reach the rest of Linear's API, the part no verb covers.
 
 DESIGN.md is the full map: curated columns, filters and behaviour per command.
 

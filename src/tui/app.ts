@@ -5,11 +5,13 @@ import {
   InputRenderable,
   InputRenderableEvents,
   type KeyEvent,
+  MarkdownRenderable,
   type Renderable,
   RenderableEvents,
   ScrollBoxRenderable,
   SelectRenderable,
   SelectRenderableEvents,
+  SyntaxStyle,
   TextRenderable,
   type SelectOption,
 } from "@opentui/core";
@@ -19,18 +21,23 @@ import {
   type TuiIssueQuery,
   TuiIssueStore,
   TUI_SORT_LABELS,
+  TUI_SORT_SHORT,
+  TUI_VIEW_LABELS,
+  TUI_VIEWS,
   type TuiSort,
+  type TuiView,
 } from "./data.ts";
-import {
-  IssueListEvents,
-  IssueListRenderable,
-  type TuiGroupMode,
-} from "./issue-list.ts";
-import { GROK_NIGHT as C } from "./theme.ts";
+import { IssueListEvents, IssueListRenderable } from "./issue-list.ts";
+import { issueDetail, issueMarkdownRenderNode } from "./markdown.ts";
+import { GROK_NIGHT as C, GROK_NIGHT_MARKDOWN } from "./theme.ts";
 
-const PRIORITIES = ["No priority", "Urgent", "High", "Medium", "Low"] as const;
-type PickerKind = "team" | "project" | "sort";
+export { issueDetail };
+export type PickerKind = "team" | "project" | "sort";
 type PickerValue = CachedTeam | CachedProject | { id: TuiSort; name: string } | null;
+
+const VIEW_TABS: { view: TuiView; key: string }[] = TUI_VIEWS.map((view, index) => ({
+  view, key: String(index + 1),
+}));
 
 class FocusSelect extends SelectRenderable {
   selectionFill: string = C.surface1;
@@ -72,32 +79,27 @@ export interface TuiAppOptions {
   onQuit?: () => void;
 }
 
-function date(value: string | null | undefined): string {
-  return value ? value.slice(0, 10) : "";
-}
-
-export function issueDetail(issue: TuiIssue | undefined): string {
-  if (!issue) return "Select an issue to view its details.";
-  const meta = [
-    `${issue.identifier}  ${issue.state.name}`,
-    `${issue.team.name} (${issue.team.key})`,
-    issue.project ? `Project: ${issue.project.name}` : "",
-    `Priority: ${PRIORITIES[issue.priority] ?? "No priority"}`,
-    issue.dueDate ? `Due: ${date(issue.dueDate)}` : "",
-    `Updated: ${date(issue.updatedAt)}`,
-    issue.labels.nodes.length ? `Labels: ${issue.labels.nodes.map((label) => label.name).join(", ")}` : "",
-    "",
-    issue.title,
-    "",
-    issue.description || "No description.",
-    "",
-    issue.url,
-  ];
-  return meta.filter((line, index) => line !== "" || meta[index - 1] !== "").join("\n");
-}
-
 function clip(value: string, length: number): string {
   return value.length <= length ? value : `${value.slice(0, Math.max(1, length - 1))}…`;
+}
+
+function tabLabel(view: TuiView, compact: boolean): string {
+  const label = TUI_VIEW_LABELS[view];
+  return compact ? label.slice(0, 3) : label;
+}
+
+export function chipLabel(kind: PickerKind, value: string, compact: boolean): string {
+  const title = kind === "team" ? "Team" : kind === "project" ? "Project" : "Sort";
+  const max = compact ? 4 : kind === "project" ? 12 : 8;
+  return `${title} ${clip(value, max)} ▾`;
+}
+
+export function footerHint(listHidden: boolean, compact: boolean, searching = false): string {
+  if (searching) return "enter apply  ·  esc cancel";
+  if (listHidden) {
+    return compact ? "esc back  ·  q quit" : "esc back  ·  / search  ·  r refresh  ·  q quit";
+  }
+  return compact ? "/ search  ·  q quit" : "/ search  ·  r refresh  ·  q quit";
 }
 
 /** Mirrors OpenTUI 0.5.1 SelectRenderable's visible-window calculation without reading its private scrollOffset. */
@@ -113,38 +115,40 @@ export function visibleSelectOffset(
 
 export class TuiApp {
   readonly root: BoxRenderable;
-  readonly controls: BoxRenderable;
+  readonly header: BoxRenderable;
+  readonly viewTabs: Record<TuiView, BoxRenderable>;
+  readonly viewTexts: Record<TuiView, TextRenderable>;
   readonly teamChip: BoxRenderable;
   readonly projectChip: BoxRenderable;
   readonly sortChip: BoxRenderable;
-  readonly groupChip: BoxRenderable;
   readonly teamText: TextRenderable;
   readonly projectText: TextRenderable;
   readonly sortText: TextRenderable;
-  readonly groupText: TextRenderable;
+  readonly searchStatus: TextRenderable;
+  readonly countText: TextRenderable;
   readonly search: BrowserInput;
   readonly list: IssueListRenderable;
   readonly detail: ScrollBoxRenderable;
-  readonly detailText: TextRenderable;
-  readonly status: TextRenderable;
+  readonly detailMarkdown: MarkdownRenderable;
   readonly footer: TextRenderable;
-  readonly paneTabs: BoxRenderable;
-  readonly issuesTab: BoxRenderable;
-  readonly detailTab: BoxRenderable;
-  readonly issuesTabText: TextRenderable;
-  readonly detailTabText: TextRenderable;
   private readonly main: BoxRenderable;
-  private readonly workspace: BoxRenderable;
+  private readonly searchOverlay: BoxRenderable;
+  private readonly syntaxStyle: SyntaxStyle;
+  private detailSource = "Loading…";
   private stopped = false;
   private generation = 0;
   private selectedTeamId: string | undefined;
   private selectedProjectId: string | undefined;
   private sort: TuiSort = "updated";
-  private groupMode: TuiGroupMode = "status";
+  private view: TuiView = "all";
   private activePane: "issues" | "detail" = "issues";
+  private listHidden = false;
   private appliedTitle = "";
   private detailIssueId: string | undefined;
   private reconcilingIssues = false;
+  private errorMessage = "";
+  private pendingDetailMarkdown = false;
+  private lastMarkdownWidth = 0;
   private lastContentFocus?: Renderable;
   private picker?: {
     kind: PickerKind;
@@ -161,20 +165,40 @@ export class TuiApp {
     private readonly options: TuiAppOptions,
   ) {
     this.selectedTeamId = options.initialTeamId;
-    this.status = new TextRenderable(renderer, {
-      id: "tui-status", content: "Loading your open issues…", height: 1, fg: C.secondary, selectable: false,
-    });
 
-    this.controls = new BoxRenderable(renderer, {
-      id: "tui-controls", width: "100%", height: 3, flexDirection: "row", gap: 1,
-      backgroundColor: C.panel,
+    this.header = new BoxRenderable(renderer, {
+      id: "tui-header", width: "100%", height: 1, flexDirection: "row", gap: 2,
+      backgroundColor: C.surface0, paddingX: 1,
     });
+    const tabs = new BoxRenderable(renderer, {
+      id: "tui-tabs", height: 1, flexDirection: "row", gap: 1, backgroundColor: C.surface0,
+    });
+    this.viewTabs = {} as Record<TuiView, BoxRenderable>;
+    this.viewTexts = {} as Record<TuiView, TextRenderable>;
+    for (const { view } of VIEW_TABS) {
+      const [tab, text] = this.makeViewTab(view);
+      this.viewTabs[view] = tab;
+      this.viewTexts[view] = text;
+      tabs.add(tab);
+    }
+    this.header.add(tabs);
     [this.teamChip, this.teamText] = this.makeChip("team");
     [this.projectChip, this.projectText] = this.makeChip("project");
     [this.sortChip, this.sortText] = this.makeChip("sort");
-    [this.groupChip, this.groupText] = this.makeGroupChip();
+    this.searchStatus = new TextRenderable(renderer, {
+      id: "tui-search-status", content: "", fg: C.yellow, selectable: false,
+    });
+    this.countText = new TextRenderable(renderer, {
+      id: "tui-count", content: "", fg: C.muted, selectable: false, flexGrow: 1,
+    });
+    this.header.add(this.teamChip);
+    this.header.add(this.projectChip);
+    this.header.add(this.sortChip);
+    this.header.add(this.searchStatus);
+    this.header.add(this.countText);
+
     this.search = new BrowserInput(renderer, {
-      id: "tui-search", width: "28%", placeholder: "Search title…",
+      id: "tui-search", width: "100%", placeholder: "Search title…",
       backgroundColor: C.surface0, focusedBackgroundColor: C.surface1,
       textColor: C.text, focusedTextColor: C.text, placeholderColor: C.muted,
       onMouseDown: (event) => { this.search.focus(); event.preventDefault(); },
@@ -185,68 +209,81 @@ export class TuiApp {
     this.search.onEscapePressed = () => this.leaveSearch();
     this.search.on(RenderableEvents.FOCUSED, () => { this.lastContentFocus = this.search; this.updateFooter(); });
     this.search.on(RenderableEvents.BLURRED, () => this.updateFooter());
-    this.controls.add(this.teamChip);
-    this.controls.add(this.projectChip);
-    this.controls.add(this.sortChip);
-    this.controls.add(this.groupChip);
-    this.controls.add(this.search);
+    const searchModal = new BoxRenderable(renderer, {
+      id: "tui-search-modal", width: renderer.terminalWidth < 80 ? "88%" : "42%", height: 3,
+      padding: 1, flexDirection: "column", border: true, borderStyle: "single",
+      borderColor: C.border, focusedBorderColor: C.lavender, backgroundColor: C.panel, title: "Search",
+      titleColor: C.lavender,
+      onMouseDown: (event) => event.preventDefault(),
+    });
+    searchModal.add(this.search);
+    this.searchOverlay = new BoxRenderable(renderer, {
+      id: "tui-search-overlay", position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+      zIndex: 100, visible: false, backgroundColor: C.base, alignItems: "center", justifyContent: "center",
+      onMouseDown: (event) => {
+        const inside = event.x >= searchModal.screenX && event.x < searchModal.screenX + searchModal.width
+          && event.y >= searchModal.screenY && event.y < searchModal.screenY + searchModal.height;
+        if (!inside) this.leaveSearch();
+        event.preventDefault();
+      },
+      onMouseScroll: (event) => event.preventDefault(),
+    });
+    this.searchOverlay.add(searchModal);
 
     this.list = new IssueListRenderable(renderer);
 
-    this.detailText = new TextRenderable(renderer, {
-      id: "tui-detail-text", content: "Loading…", width: "100%", fg: C.text,
-      wrapMode: "word", selectable: true,
+    this.syntaxStyle = SyntaxStyle.fromStyles({ ...GROK_NIGHT_MARKDOWN });
+    this.detailMarkdown = new MarkdownRenderable(renderer, {
+      id: "tui-detail-markdown", content: "Loading…", width: "100%",
+      flexGrow: 0, flexShrink: 0,
+      syntaxStyle: this.syntaxStyle, fg: C.text, bg: C.base, conceal: true,
+      internalBlockMode: "top-level",
+      tableOptions: { style: "grid", widthMode: "full", cellPaddingX: 1, borderColor: C.border },
+      renderNode: issueMarkdownRenderNode(renderer),
     });
     this.detail = new ScrollBoxRenderable(renderer, {
-      id: "tui-detail", width: "58%", height: "100%", padding: 1, border: ["left"],
-      borderColor: C.border, focusedBorderColor: C.accent, backgroundColor: C.base,
+      id: "tui-detail", width: "58%", height: "100%", padding: 1, border: true, borderStyle: "single",
+      borderColor: C.border, focusedBorderColor: C.lavender, backgroundColor: C.base,
+      title: "Detail", titleColor: C.secondary,
       scrollY: true, focusable: true,
       onMouseDown: (event) => { this.detail.focus(); event.preventDefault(); },
       onMouseOver: () => this.renderer.setMousePointer("text"),
       onMouseOut: () => this.renderer.setMousePointer("default"),
     });
-    this.detail.add(this.detailText);
+    this.detail.add(this.detailMarkdown);
+    this.detailMarkdown.on("resize", () => this.flushDetailMarkdown());
+    this.renderer.on(CliRenderEvents.FRAME, () => this.flushDetailMarkdown());
     this.main = new BoxRenderable(renderer, {
-      id: "tui-main", width: "100%", flexGrow: 1, flexDirection: "row", backgroundColor: C.base,
+      id: "tui-main", width: "100%", flexGrow: 1, flexDirection: "row", gap: 1, backgroundColor: C.base,
     });
     this.main.add(this.list); this.main.add(this.detail);
-
-    [this.issuesTab, this.issuesTabText] = this.makePaneTab("issues");
-    [this.detailTab, this.detailTabText] = this.makePaneTab("detail");
-    this.paneTabs = new BoxRenderable(renderer, {
-      id: "tui-pane-tabs", width: "100%", height: 1, flexDirection: "row", backgroundColor: C.panel,
-    });
-    this.paneTabs.add(this.issuesTab); this.paneTabs.add(this.detailTab);
-    this.workspace = new BoxRenderable(renderer, {
-      id: "tui-workspace", width: "100%", flexGrow: 1, flexDirection: "column", backgroundColor: C.base,
-    });
-    this.workspace.add(this.paneTabs); this.workspace.add(this.main);
 
     this.footer = new TextRenderable(renderer, {
       id: "tui-footer", height: 1, fg: C.secondary, selectable: false, content: "",
     });
     this.root = new BoxRenderable(renderer, {
-      id: "tui-root", width: "100%", height: "100%", padding: 1, flexDirection: "column",
-      backgroundColor: C.base, gap: 1,
+      id: "tui-root", width: "100%", height: "100%", flexDirection: "column",
+      backgroundColor: C.base,
     });
-    this.root.add(this.status); this.root.add(this.controls); this.root.add(this.workspace); this.root.add(this.footer);
+    this.root.add(this.header); this.root.add(this.main); this.root.add(this.footer); this.root.add(this.searchOverlay);
 
     this.list.on(IssueListEvents.SELECTION_CHANGED, (_index: number, issue: TuiIssue | undefined) => {
       if (!this.reconcilingIssues) this.showIssue(issue);
     });
+    this.list.on(IssueListEvents.ITEM_OPENED, () => this.openSelectedIssue());
     this.list.on(RenderableEvents.FOCUSED, () => {
       this.activePane = "issues"; this.applyPaneVisibility();
-      this.lastContentFocus = this.list; this.updatePaneTabs(); this.updateFooter();
+      this.lastContentFocus = this.list; this.updateFooter();
     });
     this.list.on(RenderableEvents.BLURRED, () => this.updateFooter());
     this.detail.on(RenderableEvents.FOCUSED, () => {
       this.activePane = "detail"; this.applyPaneVisibility();
-      this.lastContentFocus = this.detail; this.updatePaneTabs(); this.updateFooter();
+      this.lastContentFocus = this.detail; this.updateFooter();
     });
     this.detail.on(RenderableEvents.BLURRED, () => this.updateFooter());
     this.renderer.keyInput.on("keypress", (key) => this.handleGlobalKey(key));
     this.renderer.on(CliRenderEvents.RESIZE, () => this.applyLayout());
-    this.updateControls(); this.applyLayout(); this.updateFooter();
+    this.updateHeader(); this.applyLayout(); this.updateFooter();
   }
 
   mount(): void { this.renderer.root.add(this.root); this.list.focus(); }
@@ -255,7 +292,7 @@ export class TuiApp {
   currentQuery(): TuiIssueQuery {
     return {
       limit: this.options.limit, teamId: this.selectedTeamId, projectId: this.selectedProjectId,
-      title: this.appliedTitle || undefined, sort: this.sort,
+      title: this.appliedTitle || undefined, sort: this.sort, view: this.view,
     };
   }
 
@@ -263,8 +300,9 @@ export class TuiApp {
     const generation = ++this.generation;
     const query = { ...this.currentQuery() };
     this.store.loading();
-    this.status.content = "Refreshing your open issues…";
-    this.status.fg = C.secondary;
+    this.errorMessage = "";
+    this.countText.content = "Refreshing…";
+    this.countText.fg = C.secondary;
     try {
       const issues = await this.store.load(query);
       if (generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
@@ -274,22 +312,25 @@ export class TuiApp {
         ? currentId
         : undefined;
       this.reconcilingIssues = true;
-      this.list.setIssues(state.issues, this.groupMode, selectedId);
+      this.list.setIssues(state.issues, selectedId);
       this.reconcilingIssues = false;
       this.showIssue(this.list.getSelectedIssue());
       if (state.issues.length === 0) {
-        this.status.content = "No matching open issues are assigned to you.";
-        this.detailText.content = "No issues match these session filters.";
+        this.countText.content = "0";
+        this.setDetailMarkdown("No issues match this view.");
+        this.detail.title = "Detail";
       } else {
-        this.status.content = `Showing ${state.issues.length} open issue${state.issues.length === 1 ? "" : "s"} assigned to you`;
+        this.countText.content = `${state.issues.length}`;
       }
-      this.updatePaneTabs();
+      this.countText.fg = C.muted;
+      this.updateHeader();
     } catch (error) {
       if (generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
       const state = this.store.error(error);
       const message = state.kind === "error" ? state.message : String(error);
-      this.status.content = `Could not refresh: ${message}  ·  press r to retry`;
-      this.status.fg = C.red;
+      this.errorMessage = `Could not refresh: ${message}  ·  press r to retry`;
+      this.countText.fg = C.red;
+      this.updateFooter();
     }
   }
 
@@ -299,20 +340,28 @@ export class TuiApp {
   }
 
   openPicker(kind: PickerKind, previousFocus?: Renderable): void {
-    if (this.picker) return;
+    if (this.picker || this.searchOverlay.visible) return;
     const restoreFocus: Renderable = previousFocus ?? (this.detail.focused ? this.detail : this.search.focused ? this.search : this.list.focused ? this.list : this.lastContentFocus ?? this.list);
     this.lastContentFocus = restoreFocus;
     const all = this.pickerOptions(kind);
+    const modal = new BoxRenderable(this.renderer, {
+      id: "tui-picker", width: this.renderer.terminalWidth < 80 ? "88%" : "58%", height: kind === "sort" ? 10 : "62%",
+      padding: 1, gap: 1, flexDirection: "column", border: true, borderStyle: "single",
+      borderColor: C.border, focusedBorderColor: C.lavender, backgroundColor: C.panel,
+      title: kind === "team" ? "Team" : kind === "project" ? "Project" : "Sort",
+      titleColor: C.lavender,
+      onMouseDown: (event) => event.preventDefault(),
+    });
     const overlay = new BoxRenderable(this.renderer, {
       id: "tui-picker-overlay", position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
       zIndex: 100, backgroundColor: C.base, alignItems: "center", justifyContent: "center",
-      onMouseDown: (event) => event.preventDefault(), onMouseScroll: (event) => event.preventDefault(),
-    });
-    const modal = new BoxRenderable(this.renderer, {
-      id: "tui-picker", width: this.renderer.terminalWidth < 80 ? "88%" : "58%", height: kind === "sort" ? 12 : "62%",
-      padding: 1, gap: 1, flexDirection: "column", border: true, borderColor: C.border,
-      focusedBorderColor: C.accent, backgroundColor: C.panel, title: kind === "team" ? "Team" : kind === "project" ? "Project" : "Sort",
-      titleColor: C.accent,
+      onMouseDown: (event) => {
+        const inside = event.x >= modal.screenX && event.x < modal.screenX + modal.width
+          && event.y >= modal.screenY && event.y < modal.screenY + modal.height;
+        if (!inside) this.closePicker();
+        event.preventDefault();
+      },
+      onMouseScroll: (event) => event.preventDefault(),
     });
     const input = new BrowserInput(this.renderer, {
       id: "tui-picker-search", width: "100%", placeholder: kind === "sort" ? "Filter sort choices…" : `Search ${kind}s…`,
@@ -353,11 +402,7 @@ export class TuiApp {
     });
     input.on(InputRenderableEvents.ENTER, () => { if (list.options.length > 0) this.commitPicker(kind, list.getSelectedOption()?.value as PickerValue); });
     list.on(SelectRenderableEvents.ITEM_SELECTED, (_index: number, option: SelectOption) => this.commitPicker(kind, option.value as PickerValue));
-    const hint = new TextRenderable(this.renderer, {
-      id: "tui-picker-hint", height: 1, fg: C.secondary, selectable: false,
-      content: "type filter  ·  ↑/↓ or j/k move  ·  enter choose  ·  esc cancel",
-    });
-    modal.add(input); modal.add(list); modal.add(hint); overlay.add(modal); this.root.add(overlay);
+    modal.add(input); modal.add(list); overlay.add(modal); this.root.add(overlay);
     this.picker = { kind, overlay, input, list, all, previousFocus: restoreFocus };
     input.focus();
   }
@@ -375,13 +420,30 @@ export class TuiApp {
     });
   }
 
+  private makeViewTab(view: TuiView): [BoxRenderable, TextRenderable] {
+    const label = tabLabel(view, false);
+    const text = new TextRenderable(this.renderer, {
+      id: `tui-view-${view}-text`, content: label, fg: C.secondary, selectable: false,
+    });
+    const tab = new BoxRenderable(this.renderer, {
+      id: `tui-view-${view}`, height: 1, width: label.length + 2, paddingX: 1,
+      backgroundColor: C.surface0, shouldFill: true,
+      onMouseDown: (event) => { this.setView(view); event.preventDefault(); },
+      onMouseOver: () => this.renderer.setMousePointer("pointer"),
+      onMouseOut: () => this.renderer.setMousePointer("default"),
+    });
+    tab.add(text);
+    return [tab, text];
+  }
+
   private makeChip(kind: PickerKind): [BoxRenderable, TextRenderable] {
-    const text = new TextRenderable(this.renderer, { id: `tui-${kind}-text`, content: "", fg: C.text, selectable: false });
+    const text = new TextRenderable(this.renderer, {
+      id: `tui-${kind}-text`, content: "", fg: kind === "sort" ? C.muted : C.yellow, selectable: false,
+    });
     const chip = new BoxRenderable(this.renderer, {
-      id: `tui-${kind}-chip`, width: "22%", height: 3, paddingX: 1, border: true,
-      borderColor: C.border, focusedBorderColor: C.accent, backgroundColor: C.surface0, focusable: true,
+      id: `tui-${kind}-chip`, height: 1, backgroundColor: C.surface0,
       onMouseDown: (event) => {
-        const previousFocus = this.detail.focused ? this.detail : this.search.focused ? this.search : this.list;
+        const previousFocus = this.detail.focused ? this.detail : this.list;
         this.openPicker(kind, previousFocus);
         event.preventDefault();
       },
@@ -389,35 +451,6 @@ export class TuiApp {
       onMouseOut: () => this.renderer.setMousePointer("default"),
     });
     chip.add(text); return [chip, text];
-  }
-
-  private makeGroupChip(): [BoxRenderable, TextRenderable] {
-    const text = new TextRenderable(this.renderer, {
-      id: "tui-group-text", content: "", fg: C.text, selectable: false,
-    });
-    const chip = new BoxRenderable(this.renderer, {
-      id: "tui-group-chip", width: "18%", height: 3, paddingX: 1, border: true,
-      borderColor: C.border, focusedBorderColor: C.accent, backgroundColor: C.surface0, focusable: true,
-      onMouseDown: (event) => { this.toggleGrouping(); event.preventDefault(); },
-      onMouseOver: () => this.renderer.setMousePointer("pointer"),
-      onMouseOut: () => this.renderer.setMousePointer("default"),
-    });
-    chip.add(text); return [chip, text];
-  }
-
-  private makePaneTab(pane: "issues" | "detail"): [BoxRenderable, TextRenderable] {
-    const text = new TextRenderable(this.renderer, {
-      id: `tui-${pane}-tab-text`, content: pane === "issues" ? "Issues" : "Detail",
-      fg: C.secondary, selectable: false,
-    });
-    const tab = new BoxRenderable(this.renderer, {
-      id: `tui-${pane}-tab`, width: pane === "issues" ? "42%" : "58%", height: 1,
-      paddingX: 1, backgroundColor: C.panel,
-      onMouseDown: (event) => { this.activatePane(pane); event.preventDefault(); },
-      onMouseOver: () => this.renderer.setMousePointer("pointer"),
-      onMouseOut: () => this.renderer.setMousePointer("default"),
-    });
-    tab.add(text); return [tab, text];
   }
 
   private pickerOptions(kind: PickerKind): SelectOption[] {
@@ -438,62 +471,119 @@ export class TuiApp {
     if (kind === "team") this.selectedTeamId = (value as CachedTeam | null)?.id;
     else if (kind === "project") this.selectedProjectId = (value as CachedProject | null)?.id;
     else this.sort = (value as { id: TuiSort }).id;
-    this.updateControls(); this.closePicker(); void this.refresh();
+    this.updateHeader(); this.closePicker(); void this.refresh();
   }
 
-  private toggleGrouping(): void {
-    const selectedId = this.list.getSelectedIssue()?.identifier;
-    this.groupMode = this.groupMode === "status" ? "none" : "status";
-    this.list.setIssues(this.store.state.issues, this.groupMode, selectedId);
-    this.showIssue(this.list.getSelectedIssue());
-    this.updateControls();
+  private setView(view: TuiView): void {
+    if (this.view === view) {
+      this.activatePane("issues");
+      return;
+    }
+    this.view = view;
+    this.updateHeader();
+    this.activatePane("issues");
+    void this.refresh();
   }
 
   private activatePane(pane: "issues" | "detail"): void {
+    const revealList = pane === "issues" && this.listHidden;
+    if (revealList) this.listHidden = false;
     this.activePane = pane;
-    this.applyPaneVisibility();
+    if (revealList) this.applyLayout();
+    else this.applyPaneVisibility();
     (pane === "issues" ? this.list : this.detail).focus();
-    this.updatePaneTabs();
+    this.updateFooter();
+  }
+
+  private openSearch(previousFocus?: Renderable): void {
+    if (this.picker) return;
+    this.lastContentFocus = previousFocus ?? (this.detail.focused ? this.detail : this.list.focused ? this.list : this.lastContentFocus ?? this.list);
+    this.search.value = this.appliedTitle;
+    this.searchOverlay.visible = true;
+    this.search.focus();
+    this.updateFooter();
   }
 
   private applySearch(value: string): void {
     const title = value.trim();
-    if (title === this.appliedTitle) { this.activatePane("issues"); return; }
-    this.appliedTitle = title; this.activatePane("issues"); void this.refresh();
+    this.searchOverlay.visible = false;
+    if (title === this.appliedTitle) { this.activatePane("issues"); this.updateHeader(); return; }
+    this.appliedTitle = title; this.activatePane("issues"); this.updateHeader(); void this.refresh();
   }
 
   private leaveSearch(): void {
     this.search.value = this.appliedTitle;
+    this.searchOverlay.visible = false;
     this.activatePane("issues");
+    this.updateHeader();
   }
 
-  private updateControls(): void {
+  private updateHeader(): void {
     const team = this.options.meta.teams.find((item) => item.id === this.selectedTeamId);
     const project = this.options.meta.projects.find((item) => item.id === this.selectedProjectId);
     const narrow = this.renderer.terminalWidth < 80;
-    this.teamText.content = `${narrow ? "T" : "Team"}: ${clip(team?.key ?? "All", narrow ? 6 : 15)}`;
-    this.projectText.content = `${narrow ? "P" : "Project"}: ${clip(project?.name ?? "All", narrow ? 6 : 18)}`;
-    this.sortText.content = `${narrow ? "S" : "Sort"}: ${clip(TUI_SORT_LABELS[this.sort], narrow ? 7 : 17)}`;
-    this.groupText.content = `${narrow ? "G" : "Group"}: ${this.groupMode === "status" ? "Status" : "None"}`;
+    const compact = this.renderer.terminalWidth < 56;
+    for (const { view } of VIEW_TABS) {
+      const active = view === this.view;
+      const label = tabLabel(view, compact);
+      const text = this.viewTexts[view];
+      const tab = this.viewTabs[view];
+      text.content = label;
+      text.fg = active ? C.base : C.secondary;
+      tab.backgroundColor = active ? C.accent : C.surface0;
+      tab.width = label.length + 2;
+    }
+    const teamLabel = chipLabel("team", team?.key ?? "all", compact);
+    const projectLabel = chipLabel("project", project?.name ?? "all", compact);
+    const sortLabel = chipLabel("sort", TUI_SORT_SHORT[this.sort], compact);
+    const searchLabel = this.appliedTitle ? `/${clip(this.appliedTitle, compact ? 6 : 14)}` : "";
+    this.teamText.content = teamLabel;
+    this.projectText.content = projectLabel;
+    this.sortText.content = sortLabel;
+    this.teamChip.width = teamLabel.length;
+    this.projectChip.width = projectLabel.length;
+    this.sortChip.width = sortLabel.length;
+    this.teamChip.visible = !compact;
+    this.projectChip.visible = !narrow;
+    this.sortChip.visible = !narrow;
+    this.searchStatus.content = searchLabel;
+    this.searchStatus.visible = Boolean(this.appliedTitle) && !compact;
+    const count = this.store.state.issues.length;
+    this.list.title = `${TUI_VIEW_LABELS[this.view]} · ${count}`;
+    this.countText.content = this.store.state.kind === "loading" ? "Refreshing…" : `${count}`;
+  }
+
+  private setDetailMarkdown(source: string): void {
+    this.detailSource = source;
+    this.pendingDetailMarkdown = true;
+    this.flushDetailMarkdown();
+  }
+
+  private flushDetailMarkdown(): void {
+    if (this.stopped || this.renderer.isDestroyed) return;
+    if (!this.detail.visible || this.detailMarkdown.width < 10) {
+      this.pendingDetailMarkdown = true;
+      return;
+    }
+    const width = this.detailMarkdown.width;
+    const widthChanged = width !== this.lastMarkdownWidth;
+    if (!this.pendingDetailMarkdown && !widthChanged) return;
+    this.pendingDetailMarkdown = false;
+    this.lastMarkdownWidth = width;
+    if (this.detailMarkdown.content !== this.detailSource) {
+      this.detailMarkdown.content = this.detailSource;
+    } else {
+      this.detailMarkdown.clearCache();
+    }
+    this.detail.scrollTo(0);
   }
 
   private showIssue(issue: TuiIssue | undefined): void {
     const nextId = issue?.identifier;
-    this.detailText.content = issueDetail(issue);
+    this.setDetailMarkdown(issueDetail(issue));
+    this.detail.title = nextId ?? "Detail";
     if (nextId !== this.detailIssueId) this.detail.scrollTo(0);
     this.detailIssueId = nextId;
-    this.updatePaneTabs();
-  }
-
-  private updatePaneTabs(): void {
-    const issueCount = this.store.state.issues.length;
-    this.issuesTabText.content = `Issues · ${issueCount}`;
-    this.detailTabText.content = this.detailIssueId ?? "Detail";
-    const issuesActive = this.activePane === "issues";
-    this.issuesTab.backgroundColor = issuesActive ? C.accent : C.panel;
-    this.detailTab.backgroundColor = issuesActive ? C.panel : C.accent;
-    this.issuesTabText.fg = issuesActive ? C.base : C.secondary;
-    this.detailTabText.fg = issuesActive ? C.secondary : C.base;
   }
 
   private handleGlobalKey(key: KeyEvent): void {
@@ -503,18 +593,29 @@ export class TuiApp {
       if (this.picker.input.focused && key.name === "down") { key.preventDefault(); this.picker.list.focus(); }
       return;
     }
-    if (this.search.focused) {
+    if (this.searchOverlay.visible) {
       if ((key.name === "escape" || key.name === "esc")) { key.preventDefault(); this.leaveSearch(); }
+      return;
+    }
+    if (key.name === "escape" || key.name === "esc") {
+      key.preventDefault();
+      this.activatePane("issues");
       return;
     }
     if (key.name === "tab") {
       key.preventDefault(); this.activatePane(this.activePane === "issues" ? "detail" : "issues"); return;
     }
-    if (key.name === "/") { key.preventDefault(); this.search.focus(); return; }
+    if (key.name === "return" || key.name === "enter") {
+      if (this.list.focused) { key.preventDefault(); this.openSelectedIssue(); }
+      return;
+    }
+    if (key.name === "z") { key.preventDefault(); this.toggleListPane(); return; }
+    if (key.name === "/") { key.preventDefault(); this.openSearch(); return; }
+    const viewIndex = VIEW_TABS.find((tab) => tab.key === key.name);
+    if (viewIndex) { key.preventDefault(); this.setView(viewIndex.view); return; }
     if (key.name === "t") { key.preventDefault(); this.openPicker("team"); return; }
     if (key.name === "p") { key.preventDefault(); this.openPicker("project"); return; }
     if (key.name === "s") { key.preventDefault(); this.openPicker("sort"); return; }
-    if (key.name === "g") { key.preventDefault(); this.toggleGrouping(); return; }
     if (key.name === "q") { key.preventDefault(); this.quit(); return; }
     if (key.name === "r") { key.preventDefault(); void this.refresh(); return; }
     if (key.name === "pageup") {
@@ -530,42 +631,65 @@ export class TuiApp {
     }
   }
 
+  private openSelectedIssue(): void {
+    if (!this.list.getSelectedIssue()) return;
+    this.listHidden = true;
+    this.activePane = "detail";
+    this.applyLayout();
+    this.lastContentFocus = this.detail;
+    queueMicrotask(() => {
+      if (!this.stopped && !this.renderer.isDestroyed) this.detail.focus();
+    });
+  }
+
+  private toggleListPane(): void {
+    this.listHidden = !this.listHidden;
+    if (this.listHidden) {
+      this.activePane = "detail";
+      this.applyLayout();
+      this.detail.focus();
+      this.lastContentFocus = this.detail;
+      return;
+    }
+    this.applyLayout();
+  }
+
   private applyLayout(): void {
     const narrow = this.renderer.terminalWidth < 80;
-    const compact = this.renderer.terminalWidth < 56;
-    this.controls.height = compact ? 9 : narrow ? 6 : 3;
-    this.controls.flexWrap = narrow ? "wrap" : "no-wrap";
-    this.teamChip.width = compact ? "48%" : narrow ? "23%" : "16%";
-    this.projectChip.width = compact ? "48%" : narrow ? "23%" : "20%";
-    this.sortChip.width = compact ? "48%" : narrow ? "23%" : "21%";
-    this.groupChip.width = compact ? "48%" : narrow ? "23%" : "18%";
-    this.search.width = narrow ? "100%" : "21%";
     this.main.flexDirection = "row";
-    this.list.width = narrow ? "100%" : "42%"; this.list.height = "100%";
-    this.detail.width = narrow ? "100%" : "58%"; this.detail.height = "100%";
-    this.issuesTab.width = narrow ? "50%" : "42%";
-    this.detailTab.width = narrow ? "50%" : "58%";
-    this.detail.border = narrow ? [] : ["left"];
+    this.list.width = this.listHidden || narrow ? "100%" : "42%"; this.list.height = "100%";
+    this.detail.width = this.listHidden || narrow ? "100%" : "58%"; this.detail.height = "100%";
     this.applyPaneVisibility();
-    this.updateControls(); this.updatePaneTabs(); this.updateFooter();
+    this.updateHeader(); this.updateFooter();
   }
 
   private applyPaneVisibility(): void {
-    const narrow = this.renderer.terminalWidth < 80;
-    this.list.visible = !narrow || this.activePane === "issues";
-    this.detail.visible = !narrow || this.activePane === "detail";
+    const wasVisible = this.detail.visible;
+    if (this.listHidden) {
+      this.list.visible = false;
+      this.detail.visible = true;
+    } else {
+      const narrow = this.renderer.terminalWidth < 80;
+      this.list.visible = !narrow || this.activePane === "issues";
+      this.detail.visible = !narrow || this.activePane === "detail";
+    }
+    if (this.detail.visible && (!wasVisible || this.listHidden)) {
+      this.pendingDetailMarkdown = true;
+      this.flushDetailMarkdown();
+    }
   }
 
   private updateFooter(): void {
-    if (this.search.focused && !this.picker) {
-      this.footer.content = "enter search  ·  esc back  ·  ctrl-c quit";
+    if (this.errorMessage) {
+      this.footer.content = this.errorMessage;
+      this.footer.fg = C.red;
       return;
     }
-    const narrow = this.renderer.terminalWidth < 80;
-    this.footer.content = narrow
-      ? (this.renderer.terminalWidth < 50
-        ? "tab · / · g · r refresh · q quit"
-        : "tab · / find · t/p/s · g group · r refresh · q quit")
-      : "tab pane · / search · t team · p project · s sort · g group · r refresh · q quit";
+    this.footer.fg = C.muted;
+    this.footer.content = footerHint(
+      this.listHidden,
+      this.renderer.terminalWidth < 80,
+      this.searchOverlay.visible,
+    );
   }
 }
