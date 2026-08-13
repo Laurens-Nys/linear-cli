@@ -29,7 +29,7 @@ import {
 } from "./data.ts";
 import { IssueListEvents, IssueListRenderable } from "./issue-list.ts";
 import { issueDetail, issueMarkdownRenderNode } from "./markdown.ts";
-import { linearAppUrl, openExternalUrl } from "./open.ts";
+import { isRemoteSession, issueOpenUrl, openExternalUrl } from "./open.ts";
 import { GROK_NIGHT as C, GROK_NIGHT_MARKDOWN } from "./theme.ts";
 
 export { issueDetail };
@@ -78,7 +78,9 @@ export interface TuiAppOptions {
   meta: Meta;
   initialTeamId?: string;
   onQuit?: () => void;
+  remote?: boolean;
   openExternal?: (url: string) => Promise<void> | void;
+  copyToClipboard?: (text: string) => boolean;
 }
 
 function clip(value: string, length: number): string {
@@ -155,6 +157,7 @@ export class TuiApp {
   private detailIssueId: string | undefined;
   private reconcilingIssues = false;
   private errorMessage = "";
+  private notice = "";
   private pendingDetailMarkdown = false;
   private lastMarkdownWidth = 0;
   private lastContentFocus?: Renderable;
@@ -625,16 +628,32 @@ export class TuiApp {
   openInLinear(): void {
     const issue = this.shownIssue();
     if (!issue) return;
-    const url = linearAppUrl(issue.url);
+    const remote = this.options.remote ?? isRemoteSession();
+    const url = issueOpenUrl(issue.url, remote);
+    if (remote && this.options.openExternal === undefined) {
+      const copied = (this.options.copyToClipboard ?? ((text: string) => this.renderer.copyToClipboardOSC52(text)))(url);
+      if (copied) {
+        this.errorMessage = "";
+        this.notice = "copied · ctrl-click the issue URL to open on this Mac";
+        this.updateFooter();
+        return;
+      }
+      this.notice = "";
+      this.errorMessage = "Could not copy the Linear URL to this Mac";
+      this.updateFooter();
+      return;
+    }
     void Promise.resolve().then(() => (this.options.openExternal ?? openExternalUrl)(url)).then(() => {
       if (this.stopped || this.renderer.isDestroyed) return;
+      this.notice = "";
       if (this.errorMessage.startsWith("Could not open Linear")) {
         this.errorMessage = "";
-        this.updateFooter();
       }
+      this.updateFooter();
     }).catch((error) => {
       if (this.stopped || this.renderer.isDestroyed) return;
       const message = error instanceof Error ? error.message : String(error);
+      this.notice = "";
       this.errorMessage = `Could not open Linear: ${message}`;
       this.updateFooter();
     });
@@ -740,6 +759,11 @@ export class TuiApp {
     if (this.errorMessage) {
       this.footer.content = this.errorMessage;
       this.footer.fg = C.red;
+      return;
+    }
+    if (this.notice) {
+      this.footer.content = this.notice;
+      this.footer.fg = C.yellow;
       return;
     }
     this.footer.fg = C.muted;

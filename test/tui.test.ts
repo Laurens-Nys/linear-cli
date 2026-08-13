@@ -3,7 +3,7 @@ import { RGBA } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { Meta } from "../src/cache.ts";
 import { TuiApp, chipLabel, footerHint, openChipLabel, visibleSelectOffset } from "../src/tui/app.ts";
-import { linearAppUrl, openCommand } from "../src/tui/open.ts";
+import { isRemoteSession, issueOpenUrl, linearAppUrl, openCommand } from "../src/tui/open.ts";
 import { groupIssuesByState, statusPresentation } from "../src/tui/issue-list.ts";
 import { issueDetail, renderMermaidForWidth } from "../src/tui/markdown.ts";
 import {
@@ -41,8 +41,12 @@ let box: Sandbox; let net: Mock;
 beforeEach(() => { box = sandbox(); net = mock([{ match: "LinTuiIssues", data: { issues: { nodes: issues } } }]); });
 afterEach(async () => { net.restore(); box.cleanup(); await Bun.sleep(25); });
 
-function appOptions(onQuit?: () => void, extras: { openExternal?: (url: string) => Promise<void> | void } = {}) {
-  return { limit: 25, meta, onQuit, ...extras };
+function appOptions(onQuit?: () => void, extras: {
+  remote?: boolean;
+  openExternal?: (url: string) => Promise<void> | void;
+  copyToClipboard?: (text: string) => boolean;
+} = {}) {
+  return { limit: 25, meta, onQuit, remote: extras.remote ?? false, ...extras };
 }
 
 async function pressEscape(setup: Awaited<ReturnType<typeof createTestRenderer>>): Promise<void> {
@@ -610,6 +614,11 @@ describe("open in Linear", () => {
   test("turns the https issue URL into Linear's desktop protocol", () => {
     expect(linearAppUrl("https://linear.app/acme/issue/ENG-42")).toBe("linear://linear.app/acme/issue/ENG-42");
     expect(linearAppUrl("HTTPS://linear.app/issue/ENG-123")).toBe("linear://linear.app/issue/ENG-123");
+    expect(issueOpenUrl("https://linear.app/acme/issue/ENG-42", false)).toBe("linear://linear.app/acme/issue/ENG-42");
+    expect(issueOpenUrl("https://linear.app/acme/issue/ENG-42", true)).toBe("https://linear.app/acme/issue/ENG-42");
+    expect(isRemoteSession({ HERDR_ENV: "1" })).toBe(true);
+    expect(isRemoteSession({ SSH_CONNECTION: "1 2 3 4" })).toBe(true);
+    expect(isRemoteSession({})).toBe(false);
     expect(openChipLabel(false)).toBe("Open ↗");
     expect(openChipLabel(true)).toBe("↗");
     expect(openCommand("darwin")).toEqual(["open"]);
@@ -652,6 +661,29 @@ describe("open in Linear", () => {
       app.openInLinear();
       await setup.waitFor(() => app.footer.plainText.includes("Could not open Linear"));
       expect(app.footer.plainText).toContain("no handler");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("a remote session copies the https URL instead of opening Linear on the host", async () => {
+    const copied: string[] = [];
+    const opened: string[] = [];
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues),
+      appOptions(undefined, {
+        remote: true,
+        copyToClipboard: (text) => { copied.push(text); return true; },
+        // openExternal omitted: remote path must not spawn on the host
+      }),
+    );
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2);
+      app.openInLinear();
+      await setup.waitFor(() => app.footer.plainText.includes("copied"));
+      expect(copied).toEqual(["https://linear.app/x/ENG-42"]);
+      expect(opened).toEqual([]);
+      expect(app.footer.plainText).toContain("ctrl-click");
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 });
