@@ -614,7 +614,7 @@ export class TuiApp {
   private showIssue(issue: TuiIssue | undefined): void {
     const nextId = issue?.identifier;
     this.setDetailMarkdown(issueDetail(issue));
-    this.detail.title = nextId ?? "Detail";
+    this.detail.title = issue?.url ?? nextId ?? "Detail";
     if (nextId !== this.detailIssueId) this.detail.scrollTo(0);
     this.detailIssueId = nextId;
     this.openChip.visible = Boolean(nextId);
@@ -634,7 +634,7 @@ export class TuiApp {
       const copied = (this.options.copyToClipboard ?? ((text: string) => this.renderer.copyToClipboardOSC52(text)))(url);
       if (copied) {
         this.errorMessage = "";
-        this.notice = "copied · ctrl-click the issue URL to open on this Mac";
+        this.notice = "copied · ctrl-click the https URL to open on this Mac";
         this.updateFooter();
         return;
       }

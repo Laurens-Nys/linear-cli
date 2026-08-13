@@ -150,7 +150,7 @@ describe("issue detail markdown", () => {
     expect(rendered).toContain("# Fix login redirect");
     expect(rendered).toContain("**ENG-42**");
     expect(rendered).toContain("Users bounce.");
-    expect(rendered).toContain("https://linear.app/x/ENG-42");
+    expect(rendered).not.toContain("https://linear.app/x/ENG-42");
     expect(issueDetail(issues[1])).toContain("*No description.*");
     expect(issueDetail(undefined)).toBe("Select an issue to view its details.");
   });
@@ -353,21 +353,21 @@ describe("filters, search, mouse, and focus", () => {
     const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
-      expect(app.detail.title).toBe("ENG-42");
+      expect(app.detail.title).toBe("https://linear.app/x/ENG-42");
       setup.mockInput.pressKey("j"); await setup.flush();
       expect(app.list.getSelectedIndex()).toBe(1);
-      expect(app.detail.title).toBe("ENG-42");
+      expect(app.detail.title).toBe("https://linear.app/x/ENG-42");
       const second = app.list.findDescendantById("tui-issue-row-APP-4") as import("@opentui/core").Renderable;
       await setup.mockMouse.click(second.screenX + 2, second.screenY);
       await setup.flush();
-      expect(app.detail.title).toBe("APP-4");
+      expect(app.detail.title).toBe("https://linear.app/x/APP-4");
       expect(app.list.visible).toBe(true);
       setup.mockInput.pressKey("k"); await setup.flush();
       expect(app.list.getSelectedIndex()).toBe(0);
-      expect(app.detail.title).toBe("APP-4");
+      expect(app.detail.title).toBe("https://linear.app/x/APP-4");
       setup.mockInput.pressEnter();
       await setup.waitFor(() => !app.list.visible && app.detail.visible && app.detail.focused);
-      expect(app.detail.title).toBe("ENG-42");
+      expect(app.detail.title).toBe("https://linear.app/x/ENG-42");
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 });
@@ -637,6 +637,7 @@ describe("open in Linear", () => {
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       expect(app.openChip.visible).toBe(true);
+      expect(app.detail.title).toBe("https://linear.app/x/ENG-42");
       await setup.mockMouse.click(app.openChip.screenX, app.openChip.screenY); await setup.flush();
       expect(opened).toEqual(["linear://linear.app/x/ENG-42"]);
       setup.mockInput.pressKey("j"); await setup.flush();

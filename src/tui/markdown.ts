@@ -126,7 +126,5 @@ export function issueDetail(issue: TuiIssue | undefined): string {
     "---",
     "",
     issue.description?.trim() || "*No description.*",
-    "",
-    issue.url,
   ].join("\n");
 }
