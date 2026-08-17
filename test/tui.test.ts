@@ -465,6 +465,10 @@ describe("mouse-first Kanban board", () => {
     expect(second.screenY - first.screenY).toBe(3);
     expect(cards.verticalScrollBar.slider.backgroundColor.a).toBe(0);
     expect(board.horizontalScrollBar.slider.backgroundColor.a).toBe(0);
+    const startedGlyph = statusPresentation("started").glyph;
+    const startedIcon = setup.captureSpans().lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes(startedGlyph));
+    expect(startedIcon?.fg.equals(RGBA.fromHex(GROK_NIGHT.yellow))).toBe(true);
     setup.renderer.destroy();
   });
 

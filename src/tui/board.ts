@@ -1,9 +1,11 @@
 import {
   BoxRenderable,
   type CliRenderer,
+  fg,
   type KeyEvent,
   RenderableEvents,
   ScrollBoxRenderable,
+  t,
   TextRenderable,
 } from "@opentui/core";
 import type { CachedState } from "../cache.ts";
@@ -187,7 +189,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
   }
 
   private addColumn(state: KanbanState): void {
-    const glyph = statusPresentation(state.type).glyph;
+    const presentation = statusPresentation(state.type);
     const column = new BoxRenderable(this.ctx, {
       id: `tui-board-column-${state.id}`, width: COLUMN_WIDTH, height: "100%", flexShrink: 0,
       flexDirection: "column", gap: 1, padding: 1, border: true, borderStyle: "single",
@@ -196,7 +198,8 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
     this.columns.set(state.id, column);
     const count = this.issues.filter((issue) => issue.state.id === state.id).length;
     column.add(new TextRenderable(this.ctx, {
-      width: "100%", height: 1, content: `${glyph} ${state.name.toUpperCase()} · ${count}`,
+      width: "100%", height: 1,
+      content: t`${fg(presentation.fallbackColor)(presentation.glyph)} ${state.name.toUpperCase()} · ${count}`,
       fg: C.secondary, selectable: false,
     }));
     const cards = new ScrollBoxRenderable(this.ctx, {
