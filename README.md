@@ -1,6 +1,6 @@
 # lin
 
-`lin` is a Linear CLI for coding agents. Noninteractive commands print TOON, a tabular format an LLM reads at a fraction of the token cost of JSON. It ships as one binary with no runtime to install or config wizard. An explicit `lin tui` command provides a read-only terminal browser; every other command keeps the same automation-safe output in terminals and pipes.
+`lin` is a Linear CLI for coding agents. Noninteractive commands print TOON, a tabular format an LLM reads at a fraction of the token cost of JSON. It ships as one binary with no runtime to install or config wizard. An explicit `lin tui` command provides an interactive terminal browser and mouse-first Kanban board; every other command keeps the same automation-safe output in terminals and pipes.
 
 ## Why TOON
 
@@ -52,9 +52,11 @@ lin issue create --team ENG -t "Fix login redirect loop" --label Bug --assignee 
 lin tui                  # browse my assigned issues interactively
 ```
 
-## Read-only terminal browser
+## Interactive terminal browser
 
-`lin tui` is the only interactive command. It opens a read-only list of issues assigned to the authenticated viewer with a detail pane. View tabs switch between All (open), Started, Todo, and Done. Linear-colored status icons identify each issue, and the list is grouped by the team's actual state names (In Progress, In Review, Todo, and so on) while preserving the chosen sort inside each group. The detail pane renders the issue description as markdown (headings, lists, tables, fenced code) and turns `mermaid` fences into width-aware ASCII diagrams. Click Team, Project, or Sort in the header to narrow or reorder the list. Click a row or press Enter to open that issue; j/k and the wheel only move through the list. Escape returns to the list. Panes are transparent so the terminal background shows through. `/` searches titles against Linear. The footer lists the keys that are not on screen: search, refresh, and quit. Narrow terminals show one pane at a time. Filters, view, and layout are never saved. It must be run directly in an interactive terminal; use `lin ls` when piping output.
+`lin tui` is the only interactive command. It opens issues assigned to the authenticated viewer with a list and detail pane. View tabs switch between All (open), Started, Todo, and Done. Linear-colored status icons identify each issue, and the list is grouped by the team's actual state names (In Progress, In Review, Todo, and so on) while preserving the chosen sort inside each group. The detail pane renders the issue description as markdown (headings, lists, tables, fenced code) and turns `mermaid` fences into width-aware ASCII diagrams.
+
+Click **Board view** to open a Kanban board for the selected team. Its columns use that team's real workflow states in Linear order. Click a card to open its detail, or drag it to another column to update its workflow state in Linear; a failed update visibly restores the card. Board mode does not reorder cards within a column. Click Team, Project, or Sort in the header to narrow or reorder the issues. Escape returns from detail, and `b` is the keyboard fallback for switching List/Board. Panes are transparent so the terminal background shows through. `/` searches titles against Linear. The footer lists the remaining hidden controls. Narrow terminals scroll the board horizontally and otherwise show one pane at a time. Filters, view, and layout are never saved. It must be run directly in an interactive terminal; use `lin ls` when piping output.
 
 ## The output contract
 

@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { RGBA } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import type { Meta } from "../src/cache.ts";
-import { TuiApp, chipLabel, footerHint, openChipLabel, visibleSelectOffset } from "../src/tui/app.ts";
+import { TuiApp, chipLabel, footerHint, layoutChipLabel, openChipLabel, visibleSelectOffset } from "../src/tui/app.ts";
+import { KanbanBoardEvents, KanbanBoardRenderable, kanbanStates } from "../src/tui/board.ts";
 import { isRemoteSession, issueOpenUrl, linearAppUrl, openCommand } from "../src/tui/open.ts";
 import { groupIssuesByState, statusPresentation } from "../src/tui/issue-list.ts";
 import { issueDetail, renderMermaidForWidth } from "../src/tui/markdown.ts";
 import {
-  loadTuiIssues, TuiIssueStore, tuiIssueVariables, tuiStateFilter, TUI_SORTS,
+  loadTuiIssues, moveTuiIssue, TuiIssueStore, tuiIssueVariables, tuiStateFilter, TUI_SORTS,
   type TuiIssue, type TuiIssueQuery,
 } from "../src/tui/data.ts";
 import { runTui } from "../src/tui/run.ts";
@@ -15,19 +16,24 @@ import { GROK_NIGHT } from "../src/tui/theme.ts";
 import { mock, sandbox, type Mock, type Sandbox } from "./harness.ts";
 
 const issues: TuiIssue[] = [
-  { identifier: "ENG-42", title: "Fix login redirect", description: "Users bounce.", priority: 2,
+  { id: "issue-eng-42", identifier: "ENG-42", title: "Fix login redirect", description: "Users bounce.", priority: 2,
     updatedAt: "2026-08-12T10:00:00Z", dueDate: null, url: "https://linear.app/x/ENG-42",
-    state: { name: "In Progress", color: "#e0af68", type: "started" }, team: { key: "ENG", name: "Engineering" },
+    state: { id: "st-doing", name: "In Progress", color: "#e0af68", type: "started" }, team: { key: "ENG", name: "Engineering" },
     project: { name: "Reliability" }, labels: { nodes: [{ name: "Bug" }] } },
-  { identifier: "APP-4", title: "Rotate webhook secrets", description: null, priority: 3,
+  { id: "issue-app-4", identifier: "APP-4", title: "Rotate webhook secrets", description: null, priority: 3,
     updatedAt: "2026-08-11T10:00:00Z", url: "https://linear.app/x/APP-4",
-    state: { name: "Todo", color: "#a8a8a8", type: "unstarted" }, team: { key: "APP", name: "Applications" }, project: null, labels: { nodes: [] } },
+    state: { id: "st-todo", name: "Todo", color: "#a8a8a8", type: "unstarted" }, team: { key: "APP", name: "Applications" }, project: null, labels: { nodes: [] } },
 ];
 
 const meta: Meta = {
   fetchedAt: new Date().toISOString(), keyFingerprint: "x", workspace: { urlKey: "acme", name: "Acme" },
   teams: [
-    { id: "team-eng", key: "ENG", name: "Engineering", states: [], labels: [] },
+    { id: "team-eng", key: "ENG", name: "Engineering", states: [
+      { id: "st-backlog", name: "Backlog", type: "backlog", position: 1 },
+      { id: "st-todo", name: "Todo", type: "unstarted", position: 2 },
+      { id: "st-doing", name: "In Progress", type: "started", position: 3 },
+      { id: "st-done", name: "Done", type: "completed", position: 4 },
+    ], labels: [] },
     { id: "team-app", key: "APP", name: "Applications", states: [], labels: [] },
   ],
   projects: [
@@ -45,6 +51,7 @@ function appOptions(onQuit?: () => void, extras: {
   remote?: boolean;
   openExternal?: (url: string) => Promise<void> | void;
   copyToClipboard?: (text: string) => boolean;
+  moveIssue?: (issueId: string, stateId: string) => Promise<TuiIssue["state"]>;
 } = {}) {
   return { limit: 25, meta, onQuit, remote: extras.remote ?? false, ...extras };
 }
@@ -57,14 +64,15 @@ async function pressEscape(setup: Awaited<ReturnType<typeof createTestRenderer>>
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 describe("TUI issue data", () => {
   test("Mine/Open stay while team, project, and title compose", async () => {
     await loadTuiIssues({ limit: 25, teamId: "team-eng", projectId: "project-rel", title: " login ", sort: "created", view: "all" });
-    expect(net.calls[0]?.document).toContain("state { name color type }");
+    expect(net.calls[0]?.document).toContain("state { id name color type }");
     expect(net.calls[0]?.variables).toEqual({
       first: 25,
       filter: {
@@ -74,6 +82,40 @@ describe("TUI issue data", () => {
       },
       sort: [TUI_SORTS.created],
     });
+  });
+
+  test("board keeps Mine and filters out terminal canceled states", () => {
+    const variables = tuiIssueVariables({ ...baseQuery, layout: "board", teamId: "team-eng" });
+    expect(variables["filter"]).toEqual({
+      assignee: { isMe: { eq: true } },
+      state: { type: { nin: ["canceled", "duplicate"] } },
+      team: { id: { eq: "team-eng" } },
+    });
+  });
+
+  test("moves one board issue to a workflow state without retries", async () => {
+    net.restore();
+    net = mock([{ match: "LinTuiMoveIssue", data: {
+      issueUpdate: { issue: { id: "issue-eng-42", identifier: "ENG-42", state: {
+        id: "st-done", name: "Done", color: "#9ece6a", type: "completed",
+      } } },
+    } }]);
+    await expect(moveTuiIssue("issue-eng-42", "st-done")).resolves.toEqual({
+      id: "st-done", name: "Done", color: "#9ece6a", type: "completed",
+    });
+    expect(net.calls[0]?.variables).toEqual({ id: "issue-eng-42", stateId: "st-done" });
+  });
+
+  test("board moves do not retry a failed write", async () => {
+    net.restore();
+    net = mock([
+      { match: "LinTuiMoveIssue", networkError: "offline" },
+      { match: "LinTuiMoveIssue", data: { issueUpdate: { issue: { state: {
+        id: "st-done", name: "Done", color: "#9ece6a", type: "completed",
+      } } } } },
+    ]);
+    await expect(moveTuiIssue("issue-eng-42", "st-done")).rejects.toThrow("offline");
+    expect(net.calls).toHaveLength(1);
   });
 
   test("whitespace title is omitted and all three sort shapes are exact", () => {
@@ -104,9 +146,9 @@ describe("Linear status presentation", () => {
   test("groups by Linear state name and preserves server sort inside each group", () => {
     const input: TuiIssue[] = [
       { ...issues[1]!, identifier: "APP-1" },
-      { ...issues[0]!, identifier: "ENG-2", state: { name: "In Review", color: "#e0af68", type: "started" } },
+      { ...issues[0]!, identifier: "ENG-2", state: { id: "st-review", name: "In Review", color: "#e0af68", type: "started" } },
       { ...issues[0]!, identifier: "ENG-3" },
-      { ...issues[0]!, identifier: "ENG-4", state: { name: "In Review", color: "#e0af68", type: "started" } },
+      { ...issues[0]!, identifier: "ENG-4", state: { id: "st-review", name: "In Review", color: "#e0af68", type: "started" } },
     ];
     expect(groupIssuesByState(input).map((group) => ({
       name: group.name, type: group.type, ids: group.issues.map((issue) => issue.identifier),
@@ -381,6 +423,292 @@ describe("filters, search, mouse, and focus", () => {
       setup.mockInput.pressEnter();
       await setup.waitFor(() => !app.list.visible && app.detail.visible && app.detail.focused);
       expect(app.detail.title).toBe("https://linear.app/x/ENG-42");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+});
+
+describe("mouse-first Kanban board", () => {
+  test("columns follow workflow position, omit terminal states, and append live states missing from cache", () => {
+    const cached = [
+      { id: "done", name: "Done", type: "completed", position: 4 },
+      { id: "canceled", name: "Canceled", type: "canceled", position: 5 },
+      { id: "todo", name: "Todo", type: "unstarted", position: 2 },
+      { id: "duplicate", name: "Duplicate", type: "duplicate", position: 6 },
+      { id: "unknown", name: "Unknown", type: "unknown", position: 1 },
+    ];
+    const liveIssues = [
+      { ...issues[0]!, id: "review-issue", state: { id: "review", name: "In Review", color: "#fff", type: "started" as const } },
+      { ...issues[0]!, id: "blocked-issue", state: { id: "blocked", name: "Blocked", color: "#fff", type: "started" as const } },
+      { ...issues[0]!, id: "canceled-issue", state: { id: "live-canceled", name: "Canceled", color: "#fff", type: "canceled" as const } },
+    ];
+    expect(kanbanStates(cached, liveIssues).map((state) => state.id)).toEqual([
+      "todo", "done", "blocked", "review",
+    ]);
+  });
+
+  test("Board is clickable, requires a team, and keeps Team available", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
+    const queries: TuiIssueQuery[] = [];
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async (query) => { queries.push(query); return issues; }), appOptions());
+    try {
+      app.start(); await setup.waitFor(() => queries.length === 1); await setup.flush();
+      expect(layoutChipLabel("list", false)).toBe("Board view");
+      await setup.mockMouse.click(app.layoutChip.screenX + 1, app.layoutChip.screenY);
+      await setup.flush();
+      expect(app.board.visible).toBe(true);
+      expect(app.teamChip.visible).toBe(true);
+      expect(app.root.findDescendantById("tui-board-empty") as import("@opentui/core").TextRenderable | undefined).toBeDefined();
+      expect(setup.captureCharFrame()).toContain("Choose a team to use Board");
+      expect(queries).toHaveLength(1);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("switching teams clears stale cards before a failed refresh settles", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
+    const failed = deferred<TuiIssue[]>();
+    let loads = 0;
+    const appMeta: Meta = {
+      ...meta,
+      teams: meta.teams.map((team) => team.id === "team-app" ? {
+        ...team,
+        states: [{ id: "app-todo", name: "Todo", type: "unstarted", position: 1 }],
+      } : team),
+    };
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => ++loads < 3 ? [issues[0]!] : failed.promise),
+      { ...appOptions(), meta: appMeta, initialTeamId: "team-eng" },
+    );
+    try {
+      app.start(); await setup.waitFor(() => loads === 1); await setup.flush();
+      await setup.mockMouse.click(app.layoutChip.screenX + 1, app.layoutChip.screenY);
+      await setup.waitFor(() => loads === 2 && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
+      app.openPicker("team");
+      const picker = app.root.findDescendantById("tui-picker-list") as import("@opentui/core").SelectRenderable;
+      picker.setSelectedIndex(2); picker.selectCurrent();
+      await setup.waitFor(() => loads === 3); await setup.flush();
+      expect(app.root.findDescendantById("tui-board-card-ENG-42")).toBeUndefined();
+      expect(app.root.findDescendantById("tui-board-column-app-todo")).toBeDefined();
+      failed.reject(new Error("refresh failed"));
+      await setup.waitFor(() => app.footer.plainText.includes("Could not refresh")); await setup.flush();
+      expect(app.root.findDescendantById("tui-board-card-ENG-42")).toBeUndefined();
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("Board Tab keeps focus on the board until detail is open", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => [issues[0]!]),
+      { ...appOptions(), initialTeamId: "team-eng" },
+    );
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
+      setup.mockInput.pressKey("b");
+      await setup.waitFor(() => app.board.visible && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
+      setup.mockInput.pressTab(); await setup.flush();
+      expect(app.board.focused).toBe(true);
+      expect(app.detail.visible).toBe(false);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("rebuilding the board clears an armed drag", async () => {
+    const setup = await createTestRenderer({ width: 140, height: 30, useMouse: true });
+    const board = new KanbanBoardRenderable(setup.renderer);
+    setup.renderer.root.add(board);
+    board.setBoard(meta.teams[0]!.states, [issues[0]!]);
+    const drops: unknown[] = [];
+    board.on(KanbanBoardEvents.ISSUE_DROPPED, (drop) => drops.push(drop));
+    await setup.flush();
+    const card = board.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+    const done = board.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
+    await setup.mockMouse.pressDown(card.screenX + 2, card.screenY + 1);
+    await setup.mockMouse.moveTo(card.screenX + 3, card.screenY + 1);
+    await setup.mockMouse.moveTo(done.screenX + 2, done.screenY + 2);
+    expect(done.borderColor.equals(RGBA.fromHex(GROK_NIGHT.blue))).toBe(true);
+    board.setBoard(meta.teams[0]!.states, [issues[0]!]); await setup.flush();
+    const rebuiltDone = board.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
+    expect(rebuiltDone.borderColor.equals(RGBA.fromHex(GROK_NIGHT.border))).toBe(true);
+    await setup.mockMouse.release(rebuiltDone.screenX + 2, rebuiltDone.screenY + 2); await setup.flush();
+    expect(drops).toHaveLength(0);
+    setup.renderer.destroy();
+  });
+
+  test("dragging at the horizontal edge scrolls toward offscreen columns", async () => {
+    const setup = await createTestRenderer({ width: 80, height: 24, useMouse: true });
+    const states = Array.from({ length: 7 }, (_, index) => ({
+      id: `state-${index}`, name: `State ${index}`, type: index === 0 ? "unstarted" : "started", position: index,
+    }));
+    const board = new KanbanBoardRenderable(setup.renderer);
+    setup.renderer.root.add(board);
+    board.setBoard(states, [{ ...issues[0]!, state: { ...issues[0]!.state, id: "state-0" } }]);
+    await setup.flush();
+    const card = board.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+    await setup.mockMouse.pressDown(card.screenX + 2, card.screenY + 1);
+    await setup.mockMouse.moveTo(card.screenX + 3, card.screenY + 1);
+    await setup.mockMouse.moveTo(board.viewport.screenX + board.viewport.width - 1, card.screenY + 1);
+    await setup.renderOnce();
+    expect(board.scrollLeft).toBeGreaterThan(0);
+    expect(board.live).toBe(true);
+    board.setMoving("ENG-42");
+    await setup.mockMouse.release(board.viewport.screenX + board.viewport.width - 1, card.screenY + 1);
+    await setup.flush();
+    expect(board.live).toBe(false);
+    setup.renderer.destroy();
+  });
+
+  test("keyboard selection scrolls both the card list and horizontal board", async () => {
+    const setup = await createTestRenderer({ width: 70, height: 16 });
+    const states = Array.from({ length: 5 }, (_, index) => ({
+      id: `state-${index}`, name: `State ${index}`, type: index === 0 ? "unstarted" : "started", position: index,
+    }));
+    const firstColumn = Array.from({ length: 12 }, (_, index): TuiIssue => ({
+      ...issues[0]!, id: `issue-${index}`, identifier: `ENG-${index}`, state: { ...issues[0]!.state, id: "state-0" },
+    }));
+    const farIssue: TuiIssue = {
+      ...issues[0]!, id: "far-issue", identifier: "ENG-FAR", state: { ...issues[0]!.state, id: "state-4" },
+    };
+    const board = new KanbanBoardRenderable(setup.renderer);
+    setup.renderer.root.add(board);
+    board.setBoard(states, [...firstColumn, farIssue]); board.focus(); await setup.flush();
+    for (let index = 0; index < 9; index += 1) board.handleKeyPress({ name: "down" } as import("@opentui/core").KeyEvent);
+    await setup.flush();
+    const cards = board.findDescendantById("tui-board-cards-state-0") as import("@opentui/core").ScrollBoxRenderable;
+    expect(cards.scrollTop).toBeGreaterThan(0);
+    board.handleKeyPress({ name: "right" } as import("@opentui/core").KeyEvent); await setup.flush();
+    expect(board.getSelectedIssue()?.identifier).toBe("ENG-FAR");
+    expect(board.scrollLeft).toBeGreaterThan(0);
+    setup.renderer.destroy();
+  });
+
+  test("click opens detail, while drag moves to a different column optimistically", async () => {
+    const setup = await createTestRenderer({ width: 140, height: 32, useMouse: true });
+    const queries: TuiIssueQuery[] = [];
+    const move = deferred<TuiIssue["state"]>();
+    const moves: { issueId: string; stateId: string }[] = [];
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async (query) => { queries.push(query); return [issues[0]!]; }),
+      { ...appOptions(), initialTeamId: "team-eng", moveIssue: (issueId, stateId) => {
+        moves.push({ issueId, stateId }); return move.promise;
+      } },
+    );
+    try {
+      app.start(); await setup.waitFor(() => queries.length === 1); await setup.flush();
+      await setup.mockMouse.click(app.layoutChip.screenX + 1, app.layoutChip.screenY);
+      await setup.waitFor(() => queries.length === 2 && app.board.visible); await setup.flush();
+      expect(queries[1]?.layout).toBe("board");
+      const backlog = app.root.findDescendantById("tui-board-column-st-backlog") as import("@opentui/core").BoxRenderable;
+      const todoColumn = app.root.findDescendantById("tui-board-column-st-todo") as import("@opentui/core").BoxRenderable;
+      const doingColumn = app.root.findDescendantById("tui-board-column-st-doing") as import("@opentui/core").BoxRenderable;
+      expect(backlog.screenX).toBeLessThan(todoColumn.screenX);
+      expect(todoColumn.screenX).toBeLessThan(doingColumn.screenX);
+
+      let card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      await setup.mockMouse.click(card.screenX + 2, card.screenY + 1);
+      await setup.waitFor(() => app.detail.visible && !app.board.visible);
+      await pressEscape(setup);
+      expect(app.board.visible).toBe(true);
+
+      card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      const done = app.root.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
+      const startX = card.screenX + 2; const startY = card.screenY + 1;
+      await setup.mockMouse.pressDown(startX, startY);
+      await setup.mockMouse.moveTo(startX + 1, startY);
+      await setup.mockMouse.moveTo(done.screenX + 2, done.screenY + 2);
+      expect(done.borderColor.equals(RGBA.fromHex(GROK_NIGHT.blue))).toBe(true);
+      await setup.mockMouse.release(done.screenX + 2, done.screenY + 2);
+      await setup.waitFor(() => moves.length === 1); await setup.flush();
+      expect(moves).toEqual([{ issueId: "issue-eng-42", stateId: "st-done" }]);
+      card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      expect(card.screenX).toBeGreaterThanOrEqual(done.screenX);
+      expect(app.footer.plainText).toContain("Moving ENG-42 to Done");
+      const todo = app.root.findDescendantById("tui-board-column-st-todo") as import("@opentui/core").BoxRenderable;
+      await setup.mockMouse.drag(card.screenX + 2, card.screenY + 1, todo.screenX + 2, todo.screenY + 2);
+      await setup.flush();
+      expect(moves).toHaveLength(1);
+      const queryCount = queries.length;
+      setup.mockInput.pressKey("r"); setup.mockInput.pressKey("b"); setup.mockInput.pressKey("t"); setup.mockInput.pressKey("/");
+      await setup.flush();
+      expect(queries).toHaveLength(queryCount);
+      expect(app.board.visible).toBe(true);
+      expect(app.root.findDescendantById("tui-picker")).toBeUndefined();
+      expect(app.search.focused).toBe(false);
+
+      move.resolve({ id: "st-done", name: "Done", color: "#9ece6a", type: "completed" });
+      await setup.waitFor(() => app.footer.plainText.includes("ENG-42 moved to Done"));
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("a move invalidates an older refresh result", async () => {
+    const setup = await createTestRenderer({ width: 140, height: 30 });
+    const staleRefresh = deferred<TuiIssue[]>();
+    const move = deferred<TuiIssue["state"]>();
+    let loads = 0;
+    const store = new TuiIssueStore(async () => ++loads < 3 ? [issues[0]!] : staleRefresh.promise);
+    const app = new TuiApp(
+      setup.renderer,
+      store,
+      { ...appOptions(), initialTeamId: "team-eng", moveIssue: async () => move.promise },
+    );
+    try {
+      app.start(); await setup.waitFor(() => loads === 1); await setup.flush();
+      setup.mockInput.pressKey("b");
+      await setup.waitFor(() => loads === 2 && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
+      const pendingRefresh = app.refresh();
+      await setup.waitFor(() => loads === 3); await setup.flush();
+      expect(app.root.findDescendantById("tui-board-card-ENG-42")).toBeUndefined();
+      app.board.emit(KanbanBoardEvents.ISSUE_DROPPED, {
+        issue: issues[0]!,
+        state: { id: "st-done", name: "Done", type: "completed", position: 4 },
+      });
+      await setup.waitFor(() => app.footer.plainText.includes("Moving ENG-42"));
+      move.resolve({ id: "st-done", name: "Done", color: "#9ece6a", type: "completed" });
+      await setup.waitFor(() => app.footer.plainText.includes("ENG-42 moved to Done"));
+      staleRefresh.resolve([issues[0]!]); await pendingRefresh; await setup.flush();
+      expect(store.state.issues[0]?.state.id).toBe("st-done");
+      const done = app.root.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
+      const card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      expect(card.screenX).toBeGreaterThanOrEqual(done.screenX);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("same-column drops are no-ops and failed moves roll back", async () => {
+    const setup = await createTestRenderer({ width: 140, height: 32, useMouse: true });
+    const moves: { issueId: string; stateId: string }[] = [];
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => [issues[0]!]),
+      { ...appOptions(), initialTeamId: "team-eng", moveIssue: async (issueId, stateId) => {
+        moves.push({ issueId, stateId }); throw new Error("network down");
+      } },
+    );
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
+      await setup.mockMouse.click(app.layoutChip.screenX + 1, app.layoutChip.screenY);
+      await setup.waitFor(() => app.board.visible && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
+      await setup.flush();
+      let card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      const doing = app.root.findDescendantById("tui-board-column-st-doing") as import("@opentui/core").BoxRenderable;
+      const done = app.root.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
+
+      await setup.mockMouse.pressDown(card.screenX + 2, card.screenY + 1);
+      await setup.mockMouse.moveTo(card.screenX + 3, card.screenY + 1);
+      await setup.mockMouse.moveTo(doing.screenX + 2, doing.screenY + 2);
+      await setup.mockMouse.release(doing.screenX + 2, doing.screenY + 2);
+      await setup.flush();
+      expect(moves).toHaveLength(0);
+
+      card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      await setup.mockMouse.pressDown(card.screenX + 2, card.screenY + 1);
+      await setup.mockMouse.moveTo(card.screenX + 3, card.screenY + 1);
+      await setup.mockMouse.moveTo(done.screenX + 2, done.screenY + 2);
+      await setup.mockMouse.release(done.screenX + 2, done.screenY + 2);
+      await setup.waitFor(() => app.footer.plainText.includes("Could not move ENG-42")); await setup.flush();
+      expect(moves).toEqual([{ issueId: "issue-eng-42", stateId: "st-done" }]);
+      card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      expect(card.screenX).toBeGreaterThanOrEqual(doing.screenX);
+      expect(card.screenX).toBeLessThan(doing.screenX + doing.width);
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 });

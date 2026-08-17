@@ -18,9 +18,11 @@ export interface TuiIssueQuery {
   title?: string;
   sort: TuiSort;
   view: TuiView;
+  layout?: "list" | "board";
 }
 
 export interface TuiIssue {
+  id: string;
   identifier: string;
   title: string;
   description: string | null;
@@ -28,7 +30,7 @@ export interface TuiIssue {
   updatedAt: string;
   dueDate?: string | null;
   url: string;
-  state: { name: string; color: string; type: TuiWorkflowStateType };
+  state: { id: string; name: string; color: string; type: TuiWorkflowStateType };
   team: { key: string; name: string };
   project?: { name: string } | null;
   labels: { nodes: { name: string }[] };
@@ -65,7 +67,8 @@ export const TUI_VIEW_LABELS: Record<TuiView, string> = {
   completed: "Done",
 };
 
-export function tuiStateFilter(view: TuiView): Record<string, unknown> {
+export function tuiStateFilter(view: TuiView, layout: "list" | "board" = "list"): Record<string, unknown> {
+  if (layout === "board") return { type: { nin: ["canceled", "duplicate"] } };
   if (view === "completed") return { type: { eq: "completed" } };
   if (view === "started") return { type: { eq: "started" } };
   if (view === "unstarted") return { type: { in: ["unstarted", "backlog", "triage"] } };
@@ -75,6 +78,7 @@ export function tuiStateFilter(view: TuiView): Record<string, unknown> {
 export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: IssueFilter!, $sort: [IssueSortInput!]) {
   issues(first: $first, filter: $filter, sort: $sort) {
     nodes {
+      id
       identifier
       title
       description
@@ -82,7 +86,7 @@ export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: Is
       updatedAt
       dueDate
       url
-      state { name color type }
+      state { id name color type }
       team { key name }
       project { name }
       labels { nodes { name } }
@@ -93,7 +97,7 @@ export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: Is
 export function tuiIssueVariables(query: TuiIssueQuery): Record<string, unknown> {
   const filter: Record<string, unknown> = {
     assignee: { isMe: { eq: true } },
-    state: tuiStateFilter(query.view),
+    state: tuiStateFilter(query.view, query.layout),
   };
   if (query.teamId) filter["team"] = { id: { eq: query.teamId } };
   if (query.projectId) filter["project"] = { id: { eq: query.projectId } };
@@ -105,6 +109,21 @@ export function tuiIssueVariables(query: TuiIssueQuery): Record<string, unknown>
 export async function loadTuiIssues(query: TuiIssueQuery): Promise<TuiIssue[]> {
   const data = await gql<TuiIssuesResponse>(TUI_ISSUES_DOCUMENT, tuiIssueVariables(query));
   return data.issues.nodes;
+}
+
+const TUI_MOVE_DOCUMENT = `mutation LinTuiMoveIssue($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) {
+    issue { id identifier state { id name color type } }
+  }
+}`;
+
+export async function moveTuiIssue(issueId: string, stateId: string): Promise<TuiIssue["state"]> {
+  const data = await gql<{ issueUpdate: { issue: Pick<TuiIssue, "state"> } }>(
+    TUI_MOVE_DOCUMENT,
+    { id: issueId, stateId },
+    { retry: false },
+  );
+  return data.issueUpdate.issue.state;
 }
 
 export type TuiLoadState =
@@ -138,5 +157,13 @@ export class TuiIssueStore {
 
   load(query: TuiIssueQuery): Promise<TuiIssue[]> {
     return this.loader(query);
+  }
+
+  replace(issue: TuiIssue): TuiLoadState {
+    this.state = {
+      ...this.state,
+      issues: this.state.issues.map((item) => item.id === issue.id ? issue : item),
+    };
+    return this.state;
   }
 }
