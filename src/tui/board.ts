@@ -26,7 +26,9 @@ export const KanbanBoardEvents = {
 } as const;
 
 const COLUMN_WIDTH = 30;
-const CARD_HEIGHT = 3;
+const CARD_HEIGHT = 2;
+const KANBAN_TYPE_ORDER: TuiWorkflowStateType[] = ["triage", "backlog", "unstarted", "started", "completed"];
+const SCROLLBAR_TRACK = { backgroundColor: "transparent", foregroundColor: C.muted };
 
 function workflowType(type: string): TuiWorkflowStateType | undefined {
   return ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"].includes(type)
@@ -54,7 +56,10 @@ export function kanbanStates(states: readonly CachedState[], issues: readonly Tu
       position: Number.MAX_SAFE_INTEGER,
     });
   }
-  return [...configured, ...[...live.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))];
+  return [...configured, ...live.values()].sort((a, b) => {
+    const typeDelta = KANBAN_TYPE_ORDER.indexOf(a.type) - KANBAN_TYPE_ORDER.indexOf(b.type);
+    return typeDelta || a.position - b.position || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+  });
 }
 
 export class KanbanBoardRenderable extends ScrollBoxRenderable {
@@ -65,6 +70,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
   private draggedIdentifier: string | undefined;
   private targetStateId: string | undefined;
   private movingIdentifier: string | undefined;
+  private hoveredIdentifier: string | undefined;
   private readonly cards = new Map<string, BoxRenderable>();
   private readonly columns = new Map<string, BoxRenderable>();
   private readonly cardLists = new Map<string, ScrollBoxRenderable>();
@@ -74,7 +80,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
       id: "tui-board", width: "100%", height: "100%", scrollX: true, scrollY: false,
       focusable: true, viewportCulling: false, backgroundColor: "transparent",
       contentOptions: { flexDirection: "row", gap: 1, backgroundColor: "transparent" },
-      horizontalScrollbarOptions: { showArrows: false },
+      horizontalScrollbarOptions: { showArrows: false, trackOptions: SCROLLBAR_TRACK },
       onMouseDrag: (event) => {
         if (!this.pressedIdentifier || this.movingIdentifier) return;
         this.draggedIdentifier = this.pressedIdentifier;
@@ -115,6 +121,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
     for (const child of [...this.getChildren()]) child.destroyRecursively();
     this.cards.clear();
     this.columns.clear();
+    this.hoveredIdentifier = undefined;
     this.cardLists.clear();
     this.states = kanbanStates(states, issues);
     this.issues = [...issues];
@@ -195,8 +202,8 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
     const cards = new ScrollBoxRenderable(this.ctx, {
       id: `tui-board-cards-${state.id}`, width: "100%", flexGrow: 1, scrollY: true,
       backgroundColor: "transparent", viewportCulling: true,
-      contentOptions: { flexDirection: "column", gap: 1, backgroundColor: "transparent" },
-      verticalScrollbarOptions: { showArrows: false },
+      contentOptions: { flexDirection: "column", backgroundColor: "transparent" },
+      verticalScrollbarOptions: { showArrows: false, trackOptions: SCROLLBAR_TRACK },
     });
     this.cardLists.set(state.id, cards);
     for (const issue of this.issues.filter((item) => item.state.id === state.id)) cards.add(this.makeCard(issue));
@@ -207,7 +214,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
   private makeCard(issue: TuiIssue): BoxRenderable {
     const card = new BoxRenderable(this.ctx, {
       id: `tui-board-card-${issue.identifier}`, width: "100%", height: CARD_HEIGHT,
-      flexShrink: 0, flexDirection: "column", paddingX: 1, backgroundColor: C.surface0,
+      flexShrink: 0, flexDirection: "column", paddingX: 1, backgroundColor: "transparent",
       onMouseDown: (event) => {
         if (this.movingIdentifier) { this.renderer.setMousePointer("not-allowed"); event.preventDefault(); return; }
         this.pressedIdentifier = issue.identifier;
@@ -215,8 +222,16 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
         this.focus();
         event.preventDefault();
       },
-      onMouseOver: () => this.renderer.setMousePointer(this.movingIdentifier ? "not-allowed" : "pointer"),
-      onMouseOut: () => { if (!this.draggedIdentifier) this.renderer.setMousePointer("default"); },
+      onMouseOver: () => {
+        this.hoveredIdentifier = issue.identifier;
+        this.updateCardFills();
+        this.renderer.setMousePointer(this.movingIdentifier ? "not-allowed" : "pointer");
+      },
+      onMouseOut: () => {
+        if (this.hoveredIdentifier === issue.identifier) this.hoveredIdentifier = undefined;
+        this.updateCardFills();
+        if (!this.draggedIdentifier) this.renderer.setMousePointer("default");
+      },
     });
     card.add(new TextRenderable(this.ctx, {
       width: "100%", height: 1, content: issue.identifier, fg: C.lavender, selectable: false,
@@ -250,7 +265,9 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
           ? C.surface1
           : identifier === this.selectedIdentifier && this.focused
             ? C.surface1
-            : C.surface0;
+            : identifier === this.hoveredIdentifier
+              ? C.surface0
+              : "transparent";
     }
   }
 

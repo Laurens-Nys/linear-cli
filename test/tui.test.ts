@@ -428,22 +428,44 @@ describe("filters, search, mouse, and focus", () => {
 });
 
 describe("mouse-first Kanban board", () => {
-  test("columns follow workflow position, omit terminal states, and append live states missing from cache", () => {
+  test("columns follow workflow progression, omit terminal states, and append live states missing from cache", () => {
     const cached = [
-      { id: "done", name: "Done", type: "completed", position: 4 },
-      { id: "canceled", name: "Canceled", type: "canceled", position: 5 },
-      { id: "todo", name: "Todo", type: "unstarted", position: 2 },
-      { id: "duplicate", name: "Duplicate", type: "duplicate", position: 6 },
+      { id: "backlog", name: "Backlog", type: "backlog", position: 0 },
+      { id: "planned", name: "Planned", type: "unstarted", position: 1 },
+      { id: "progress", name: "In Progress", type: "started", position: 2 },
+      { id: "done", name: "Done", type: "completed", position: 3 },
+      { id: "canceled", name: "Canceled", type: "canceled", position: 4 },
+      { id: "duplicate", name: "Duplicate", type: "duplicate", position: 5 },
+      { id: "review", name: "In Review", type: "started", position: 1002 },
       { id: "unknown", name: "Unknown", type: "unknown", position: 1 },
     ];
     const liveIssues = [
-      { ...issues[0]!, id: "review-issue", state: { id: "review", name: "In Review", color: "#fff", type: "started" as const } },
       { ...issues[0]!, id: "blocked-issue", state: { id: "blocked", name: "Blocked", color: "#fff", type: "started" as const } },
       { ...issues[0]!, id: "canceled-issue", state: { id: "live-canceled", name: "Canceled", color: "#fff", type: "canceled" as const } },
     ];
     expect(kanbanStates(cached, liveIssues).map((state) => state.id)).toEqual([
-      "todo", "done", "blocked", "review",
+      "backlog", "planned", "progress", "review", "blocked", "done",
     ]);
+  });
+
+  test("cards are compact and transparent, and scrollbars render only their thumb", async () => {
+    const setup = await createTestRenderer({ width: 90, height: 24 });
+    const board = new KanbanBoardRenderable(setup.renderer);
+    setup.renderer.root.add(board);
+    board.setBoard(meta.teams[0]!.states, [
+      issues[0]!,
+      { ...issues[0]!, id: "issue-eng-43", identifier: "ENG-43", title: "Second issue" },
+    ]);
+    await setup.flush();
+    const first = board.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+    const second = board.findDescendantById("tui-board-card-ENG-43") as import("@opentui/core").BoxRenderable;
+    const cards = board.findDescendantById("tui-board-cards-st-doing") as import("@opentui/core").ScrollBoxRenderable;
+    expect(first.height).toBe(2);
+    expect(first.backgroundColor.a).toBe(0);
+    expect(second.screenY - first.screenY).toBe(2);
+    expect(cards.verticalScrollBar.slider.backgroundColor.a).toBe(0);
+    expect(board.horizontalScrollBar.slider.backgroundColor.a).toBe(0);
+    setup.renderer.destroy();
   });
 
   test("Board is clickable, requires a team, and keeps Team available", async () => {
