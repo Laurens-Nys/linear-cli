@@ -84,6 +84,7 @@ export interface TuiAppOptions {
   openExternal?: (url: string) => Promise<void> | void;
   copyToClipboard?: (text: string) => boolean;
   moveIssue?: (issueId: string, stateId: string) => Promise<TuiIssue["state"]>;
+  moveNoticeDurationMs?: number;
 }
 
 function clip(value: string, length: number): string {
@@ -181,6 +182,9 @@ export class TuiApp {
   private notice = "";
   private pendingDetailMarkdown = false;
   private pendingMove = false;
+  private boardQueryKey: string | undefined;
+  private dragHint = "";
+  private moveNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   private lastMarkdownWidth = 0;
   private lastContentFocus?: Renderable;
   private picker?: {
@@ -315,6 +319,10 @@ export class TuiApp {
     this.list.on(IssueListEvents.ITEM_OPENED, () => this.openSelectedIssue());
     this.board.on(KanbanBoardEvents.ITEM_OPENED, (issue: TuiIssue) => this.openIssue(issue));
     this.board.on(KanbanBoardEvents.ISSUE_DROPPED, (drop: KanbanDrop) => { void this.moveBoardIssue(drop); });
+    this.board.on(KanbanBoardEvents.DRAG_TARGET_CHANGED, (drop: KanbanDrop | undefined) => {
+      this.dragHint = drop ? `Move ${drop.issue.identifier} to ${drop.state.name}` : "";
+      this.updateFooter();
+    });
     this.list.on(RenderableEvents.FOCUSED, () => {
       this.activePane = "issues"; this.applyPaneVisibility();
       this.lastContentFocus = this.list; this.updateFooter();
@@ -348,15 +356,21 @@ export class TuiApp {
   async refresh(): Promise<void> {
     if (this.pendingMove) return;
     const generation = ++this.generation;
+    const query = { ...this.currentQuery() };
+    const boardKey = this.layout === "board" ? this.boardScopeKey(query) : undefined;
     if (this.layout === "board" && !this.selectedTeamId) {
       this.board.setBoard([], []);
+      this.board.setInteractive(false);
+      this.boardQueryKey = undefined;
       this.countText.content = "Choose team";
       this.countText.fg = C.muted;
       this.updateHeader();
       return;
     }
-    if (this.layout === "board") this.board.setBoard(this.selectedTeam()?.states ?? [], []);
-    const query = { ...this.currentQuery() };
+    if (this.layout === "board") {
+      if (boardKey !== this.boardQueryKey) this.board.setBoard(this.selectedTeam()?.states ?? [], []);
+      this.board.setInteractive(false);
+    }
     this.store.loading();
     this.errorMessage = "";
     this.countText.content = "Refreshing…";
@@ -370,6 +384,10 @@ export class TuiApp {
         ? currentId
         : undefined;
       this.renderIssues(state.issues, selectedId);
+      if (this.layout === "board") {
+        this.boardQueryKey = boardKey;
+        this.board.setInteractive(true);
+      }
       const openIssue = this.detailIssueId
         ? state.issues.find((issue) => issue.identifier === this.detailIssueId)
         : undefined;
@@ -389,13 +407,16 @@ export class TuiApp {
       const message = state.kind === "error" ? state.message : String(error);
       this.errorMessage = `Could not refresh: ${message}  ·  press r to retry`;
       this.countText.fg = C.red;
+      if (this.layout === "board") this.board.setInteractive(false);
       this.updateFooter();
     }
   }
 
   quit(): void {
     if (this.stopped) return;
-    this.stopped = true; this.generation += 1; this.options.onQuit?.();
+    this.stopped = true; this.generation += 1;
+    if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
+    this.options.onQuit?.();
   }
 
   openPicker(kind: PickerKind, previousFocus?: Renderable): void {
@@ -488,6 +509,17 @@ export class TuiApp {
     return this.options.meta.teams.find((team) => team.id === this.selectedTeamId);
   }
 
+  private boardScopeKey(query: TuiIssueQuery): string {
+    return JSON.stringify({
+      limit: query.limit,
+      teamId: query.teamId,
+      projectId: query.projectId,
+      title: query.title,
+      sort: query.sort,
+      layout: "board",
+    });
+  }
+
   private renderIssues(issues: readonly TuiIssue[], selectedIdentifier?: string): void {
     this.reconcilingIssues = true;
     this.list.setIssues(issues, selectedIdentifier);
@@ -500,7 +532,6 @@ export class TuiApp {
   private toggleLayout(): void {
     if (this.pendingMove) return;
     this.layout = this.layout === "list" ? "board" : "list";
-    if (this.layout === "board") this.board.setBoard(this.selectedTeam()?.states ?? [], []);
     this.listHidden = false;
     this.activePane = "issues";
     this.applyLayout();
@@ -514,8 +545,11 @@ export class TuiApp {
     if (this.pendingMove || issue.state.id === state.id) return;
     const current = this.store.state.issues.find((item) => item.id === issue.id);
     if (!current) return;
+    const scrollSnapshot = this.board.captureScrollState();
     this.pendingMove = true;
     this.generation += 1;
+    if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
+    this.moveNoticeTimer = undefined;
     this.notice = `Moving ${issue.identifier} to ${state.name}…`;
     this.errorMessage = "";
     const optimistic: TuiIssue = {
@@ -523,7 +557,7 @@ export class TuiApp {
       state: {
         id: state.id,
         name: state.name,
-        color: "",
+        color: state.color ?? "",
         type: state.type,
       },
     };
@@ -539,11 +573,12 @@ export class TuiApp {
       this.store.replace(moved);
       this.renderIssues(this.store.state.issues, issue.identifier);
       if (this.detailIssueId === issue.identifier) this.showIssue(moved);
-      this.notice = `${issue.identifier} moved to ${movedState.name}`;
+      this.showMoveConfirmation(`${issue.identifier} moved to ${movedState.name}`);
     } catch (error) {
       if (this.stopped || this.renderer.isDestroyed) return;
       this.store.replace(current);
       this.renderIssues(this.store.state.issues, issue.identifier);
+      this.board.restoreScrollState(scrollSnapshot);
       if (this.detailIssueId === issue.identifier) this.showIssue(current);
       const message = error instanceof Error ? error.message : String(error);
       this.notice = "";
@@ -555,6 +590,17 @@ export class TuiApp {
         this.updateHeader(); this.updateFooter();
       }
     }
+  }
+
+  private showMoveConfirmation(message: string): void {
+    if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
+    this.notice = message;
+    const duration = this.options.moveNoticeDurationMs ?? 1200;
+    this.moveNoticeTimer = setTimeout(() => {
+      this.moveNoticeTimer = undefined;
+      if (this.notice === message) this.notice = "";
+      if (!this.stopped && !this.renderer.isDestroyed) this.updateFooter();
+    }, duration);
   }
 
   private makeViewTab(view: TuiView): [BoxRenderable, TextRenderable] {
@@ -916,6 +962,11 @@ export class TuiApp {
     if (this.errorMessage) {
       this.footer.content = this.errorMessage;
       this.footer.fg = C.red;
+      return;
+    }
+    if (this.dragHint) {
+      this.footer.content = this.dragHint;
+      this.footer.fg = C.blue;
       return;
     }
     if (this.notice) {

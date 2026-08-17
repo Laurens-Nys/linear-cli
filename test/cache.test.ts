@@ -70,6 +70,7 @@ describe("parsing a warm response", () => {
       "Done",
       "Canceled",
     ]);
+    expect(eng?.states.find((state) => state.name === "In Review")?.color).toBe("#bb9af7");
     expect(eng?.labels.find((label) => label.name === "P0")?.parent).toBe("Priority");
     expect(eng?.labels.find((label) => label.name === "Bug")?.parent).toBeNull();
   });
@@ -105,6 +106,21 @@ describe("reading and writing", () => {
       expect(readCached(box.env)?.workspace.urlKey).toBe("acme");
     } finally {
       stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("accepts caches written before workflow state colors were captured", () => {
+    const box = sandbox();
+    try {
+      const old = meta(box.env, new Date().toISOString());
+      old.teams = old.teams.map((team) => ({
+        ...team,
+        states: team.states.map(({ color: _color, ...state }) => state),
+      }));
+      writeCached(old, box.env);
+      expect(readCached(box.env)?.teams[0]?.states[0]?.color).toBeUndefined();
+    } finally {
       box.cleanup();
     }
   });
@@ -213,6 +229,7 @@ describe("load", () => {
       for (const field of ["viewer", "teams(", "states(", "labels(", "templates(", "users(", "projects(", "organization"]) {
         expect(document).toContain(field);
       }
+      expect(document).toContain("states(first: 30) { nodes { id name type position color } }");
     } finally {
       stub.restore();
       box.cleanup();

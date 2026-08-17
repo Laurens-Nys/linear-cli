@@ -29,10 +29,10 @@ const meta: Meta = {
   fetchedAt: new Date().toISOString(), keyFingerprint: "x", workspace: { urlKey: "acme", name: "Acme" },
   teams: [
     { id: "team-eng", key: "ENG", name: "Engineering", states: [
-      { id: "st-backlog", name: "Backlog", type: "backlog", position: 1 },
-      { id: "st-todo", name: "Todo", type: "unstarted", position: 2 },
-      { id: "st-doing", name: "In Progress", type: "started", position: 3 },
-      { id: "st-done", name: "Done", type: "completed", position: 4 },
+      { id: "st-backlog", name: "Backlog", type: "backlog", position: 1, color: "#6c6c6c" },
+      { id: "st-todo", name: "Todo", type: "unstarted", position: 2, color: "#a8a8a8" },
+      { id: "st-doing", name: "In Progress", type: "started", position: 3, color: "#e0af68" },
+      { id: "st-done", name: "Done", type: "completed", position: 4, color: "#9ece6a" },
     ], labels: [] },
     { id: "team-app", key: "APP", name: "Applications", states: [], labels: [] },
   ],
@@ -52,6 +52,7 @@ function appOptions(onQuit?: () => void, extras: {
   openExternal?: (url: string) => Promise<void> | void;
   copyToClipboard?: (text: string) => boolean;
   moveIssue?: (issueId: string, stateId: string) => Promise<TuiIssue["state"]>;
+  moveNoticeDurationMs?: number;
 } = {}) {
   return { limit: 25, meta, onQuit, remote: extras.remote ?? false, ...extras };
 }
@@ -440,19 +441,23 @@ describe("mouse-first Kanban board", () => {
       { id: "unknown", name: "Unknown", type: "unknown", position: 1 },
     ];
     const liveIssues = [
+      { ...issues[0]!, id: "progress-issue", state: { id: "progress", name: "In Progress", color: "#123456", type: "started" as const } },
       { ...issues[0]!, id: "blocked-issue", state: { id: "blocked", name: "Blocked", color: "#fff", type: "started" as const } },
       { ...issues[0]!, id: "canceled-issue", state: { id: "live-canceled", name: "Canceled", color: "#fff", type: "canceled" as const } },
     ];
-    expect(kanbanStates(cached, liveIssues).map((state) => state.id)).toEqual([
+    const states = kanbanStates(cached, liveIssues);
+    expect(states.map((state) => state.id)).toEqual([
       "backlog", "planned", "progress", "review", "blocked", "done",
     ]);
+    expect(states.find((state) => state.id === "progress")?.color).toBe("#123456");
   });
 
   test("cards are compact, transparent, and separated while scrollbars render only their thumb", async () => {
     const setup = await createTestRenderer({ width: 90, height: 24 });
     const board = new KanbanBoardRenderable(setup.renderer);
     setup.renderer.root.add(board);
-    board.setBoard(meta.teams[0]!.states, [
+    const coloredStates = meta.teams[0]!.states.map((state) => state.id === "st-doing" ? { ...state, color: "#123456" } : state);
+    board.setBoard(coloredStates, [
       issues[0]!,
       { ...issues[0]!, id: "issue-eng-43", identifier: "ENG-43", title: "Second issue" },
     ]);
@@ -462,13 +467,99 @@ describe("mouse-first Kanban board", () => {
     const cards = board.findDescendantById("tui-board-cards-st-doing") as import("@opentui/core").ScrollBoxRenderable;
     expect(first.height).toBe(2);
     expect(first.backgroundColor.a).toBe(0);
+    expect(first.getChildren()).toHaveLength(1);
+    expect((first.getChildren()[0] as import("@opentui/core").TextRenderable).plainText).toBe("ENG-42  Fix login redirect");
+    const cardFrame = setup.captureCharFrame();
+    expect(cardFrame).toContain("ENG-42  Fix login");
+    expect(cardFrame).toContain("redirect");
     expect(second.screenY - first.screenY).toBe(3);
     expect(cards.verticalScrollBar.slider.backgroundColor.a).toBe(0);
     expect(board.horizontalScrollBar.slider.backgroundColor.a).toBe(0);
     const startedGlyph = statusPresentation("started").glyph;
     const startedIcon = setup.captureSpans().lines.flatMap((line) => line.spans)
       .find((span) => span.text.includes(startedGlyph));
-    expect(startedIcon?.fg.equals(RGBA.fromHex(GROK_NIGHT.yellow))).toBe(true);
+    expect(startedIcon?.fg.equals(RGBA.fromHex("#123456"))).toBe(true);
+    setup.renderer.destroy();
+  });
+
+  test("reconciles moves without replacing unaffected cards or losing scroll", async () => {
+    const setup = await createTestRenderer({ width: 80, height: 15 });
+    const states = [
+      { id: "backlog", name: "Backlog", type: "backlog", position: 0 },
+      { id: "planned", name: "Planned", type: "unstarted", position: 1 },
+      { id: "progress", name: "In Progress", type: "started", position: 2 },
+      { id: "review", name: "In Review", type: "started", position: 3 },
+      { id: "done", name: "Done", type: "completed", position: 4 },
+    ];
+    const columnIssues = Array.from({ length: 12 }, (_, index): TuiIssue => ({
+      ...issues[0]!, id: `issue-${index}`, identifier: `PRO-${index}`, state: { ...issues[0]!.state, id: "progress" },
+    }));
+    const board = new KanbanBoardRenderable(setup.renderer);
+    setup.renderer.root.add(board);
+    board.setBoard(states, columnIssues); await setup.flush();
+    const progress = board.findDescendantById("tui-board-column-progress");
+    const movedCard = board.findDescendantById("tui-board-card-PRO-0");
+    const stableCard = board.findDescendantById("tui-board-card-PRO-1");
+    const cards = board.findDescendantById("tui-board-cards-progress") as import("@opentui/core").ScrollBoxRenderable;
+    board.scrollLeft = 20; cards.scrollTop = 5; await setup.flush();
+    board.setBoard(states, columnIssues.map((issue, index) => index === 0
+      ? { ...issue, state: { ...issue.state, id: "done", name: "Done", type: "completed" } }
+      : issue));
+    await setup.flush();
+    expect(board.findDescendantById("tui-board-column-progress")).toBe(progress);
+    expect(board.findDescendantById("tui-board-card-PRO-0")).toBe(movedCard);
+    expect(board.findDescendantById("tui-board-card-PRO-1")).toBe(stableCard);
+    expect(board.scrollLeft).toBe(20);
+    expect(cards.scrollTop).toBe(5);
+    const done = board.findDescendantById("tui-board-column-done") as import("@opentui/core").BoxRenderable;
+    expect((movedCard as import("@opentui/core").BoxRenderable).screenX).toBeGreaterThanOrEqual(done.screenX);
+    setup.renderer.destroy();
+  });
+
+  test("adapts column widths and scrolls only below the five-column minimum", async () => {
+    const setup = await createTestRenderer({ width: 160, height: 24 });
+    const states = [
+      { id: "backlog", name: "Backlog", type: "backlog", position: 0 },
+      { id: "planned", name: "Planned", type: "unstarted", position: 1 },
+      { id: "progress", name: "In Progress", type: "started", position: 2 },
+      { id: "review", name: "In Review", type: "started", position: 3 },
+      { id: "done", name: "Done", type: "completed", position: 4 },
+    ];
+    const board = new KanbanBoardRenderable(setup.renderer);
+    setup.renderer.root.add(board); board.setBoard(states, []); await setup.flush();
+    const wideColumns = states.map((state) => board.findDescendantById(`tui-board-column-${state.id}`) as import("@opentui/core").BoxRenderable);
+    expect(wideColumns.every((column) => column.width === 31)).toBe(true);
+    expect(board.scrollWidth).toBeLessThanOrEqual(board.viewport.width);
+    setup.resize(100, 24); await setup.flush();
+    expect(wideColumns.every((column) => column.width === 24)).toBe(true);
+    expect(board.scrollWidth).toBeGreaterThan(board.viewport.width);
+    setup.renderer.destroy();
+  });
+
+  test("requires a real drag, dims its source, and washes only a different target column", async () => {
+    const setup = await createTestRenderer({ width: 140, height: 24, useMouse: true });
+    const board = new KanbanBoardRenderable(setup.renderer);
+    setup.renderer.root.add(board); board.setBoard(meta.teams[0]!.states, [issues[0]!]); await setup.flush();
+    const targets: (string | undefined)[] = [];
+    let opened = 0;
+    board.on(KanbanBoardEvents.DRAG_TARGET_CHANGED, (drop: { state: { id: string } } | undefined) => targets.push(drop?.state.id));
+    board.on(KanbanBoardEvents.ITEM_OPENED, () => { opened += 1; });
+    let card = board.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+    const done = board.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
+    await setup.mockMouse.pressDown(card.screenX + 2, card.screenY);
+    await setup.mockMouse.moveTo(card.screenX + 3, card.screenY);
+    expect(targets).toHaveLength(0);
+    await setup.mockMouse.release(card.screenX + 3, card.screenY); await setup.flush();
+    expect(opened).toBe(1);
+    card = board.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+    await setup.mockMouse.pressDown(card.screenX + 2, card.screenY);
+    await setup.mockMouse.moveTo(done.screenX + 2, done.screenY + 2); await setup.renderOnce();
+    expect(targets.at(-1)).toBe("st-done");
+    expect(done.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.surface0))).toBe(true);
+    const idSpan = setup.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("ENG-42"));
+    expect(idSpan?.fg.equals(RGBA.fromHex(GROK_NIGHT.muted))).toBe(true);
+    await setup.mockMouse.release(done.screenX + 2, done.screenY + 2); await setup.flush();
+    expect(targets.at(-1)).toBeUndefined();
     setup.renderer.destroy();
   });
 
@@ -538,7 +629,7 @@ describe("mouse-first Kanban board", () => {
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
-  test("rebuilding the board clears an armed drag", async () => {
+  test("reconciling the board clears an armed drag", async () => {
     const setup = await createTestRenderer({ width: 140, height: 30, useMouse: true });
     const board = new KanbanBoardRenderable(setup.renderer);
     setup.renderer.root.add(board);
@@ -560,7 +651,7 @@ describe("mouse-first Kanban board", () => {
     setup.renderer.destroy();
   });
 
-  test("dragging at the horizontal edge scrolls toward offscreen columns", async () => {
+  test("edge scrolling keeps the highlighted target and dropped state aligned under a stationary pointer", async () => {
     const setup = await createTestRenderer({ width: 80, height: 24, useMouse: true });
     const states = Array.from({ length: 7 }, (_, index) => ({
       id: `state-${index}`, name: `State ${index}`, type: index === 0 ? "unstarted" : "started", position: index,
@@ -568,17 +659,28 @@ describe("mouse-first Kanban board", () => {
     const board = new KanbanBoardRenderable(setup.renderer);
     setup.renderer.root.add(board);
     board.setBoard(states, [{ ...issues[0]!, state: { ...issues[0]!.state, id: "state-0" } }]);
+    const targets: (string | undefined)[] = [];
+    const drops: string[] = [];
+    board.on(KanbanBoardEvents.DRAG_TARGET_CHANGED, (drop: { state: { id: string } } | undefined) => targets.push(drop?.state.id));
+    board.on(KanbanBoardEvents.ISSUE_DROPPED, (drop: { state: { id: string } }) => drops.push(drop.state.id));
     await setup.flush();
     const card = board.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
-    await setup.mockMouse.pressDown(card.screenX + 2, card.screenY + 1);
-    await setup.mockMouse.moveTo(card.screenX + 3, card.screenY + 1);
-    await setup.mockMouse.moveTo(board.viewport.screenX + board.viewport.width - 1, card.screenY + 1);
+    const fixedX = board.viewport.screenX + board.viewport.width - 1;
+    const fixedY = card.screenY + 1;
+    await setup.mockMouse.pressDown(card.screenX + 2, fixedY);
+    await setup.mockMouse.moveTo(fixedX, fixedY);
     await setup.renderOnce();
-    expect(board.scrollLeft).toBeGreaterThan(0);
+    const firstTarget = targets.at(-1);
+    expect(firstTarget).toBeDefined();
     expect(board.live).toBe(true);
-    board.setMoving("ENG-42");
-    await setup.mockMouse.release(board.viewport.screenX + board.viewport.width - 1, card.screenY + 1);
+    board.scrollBy({ x: 28, y: 0 });
+    await setup.renderOnce();
+    const scrolledTarget = targets.at(-1);
+    expect(scrolledTarget).toBeDefined();
+    expect(scrolledTarget).not.toBe(firstTarget);
+    await setup.mockMouse.release(fixedX, fixedY);
     await setup.flush();
+    expect(drops).toEqual([scrolledTarget as string]);
     expect(board.live).toBe(false);
     setup.renderer.destroy();
   });
@@ -612,12 +714,13 @@ describe("mouse-first Kanban board", () => {
     const queries: TuiIssueQuery[] = [];
     const move = deferred<TuiIssue["state"]>();
     const moves: { issueId: string; stateId: string }[] = [];
+    let copies = 0;
     const app = new TuiApp(
       setup.renderer,
       new TuiIssueStore(async (query) => { queries.push(query); return [issues[0]!]; }),
-      { ...appOptions(), initialTeamId: "team-eng", moveIssue: (issueId, stateId) => {
-        moves.push({ issueId, stateId }); return move.promise;
-      } },
+      { ...appOptions(), initialTeamId: "team-eng", remote: true, moveNoticeDurationMs: 50,
+        copyToClipboard: () => { copies += 1; return true; },
+        moveIssue: (issueId, stateId) => { moves.push({ issueId, stateId }); return move.promise; } },
     );
     try {
       app.start(); await setup.waitFor(() => queries.length === 1); await setup.flush();
@@ -638,15 +741,21 @@ describe("mouse-first Kanban board", () => {
 
       card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
       const done = app.root.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
+      const cardBeforeMove = card;
+      const doneBeforeMove = done;
       const startX = card.screenX + 2; const startY = card.screenY + 1;
       await setup.mockMouse.pressDown(startX, startY);
       await setup.mockMouse.moveTo(startX + 1, startY);
       await setup.mockMouse.moveTo(done.screenX + 2, done.screenY + 2);
       expect(done.borderColor.equals(RGBA.fromHex(GROK_NIGHT.blue))).toBe(true);
+      expect(app.footer.plainText).toBe("Move ENG-42 to Done");
       await setup.mockMouse.release(done.screenX + 2, done.screenY + 2);
       await setup.waitFor(() => moves.length === 1); await setup.flush();
       expect(moves).toEqual([{ issueId: "issue-eng-42", stateId: "st-done" }]);
+      expect(copies).toBe(0);
       card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      expect(card).toBe(cardBeforeMove);
+      expect(app.root.findDescendantById("tui-board-column-st-done")).toBe(doneBeforeMove);
       expect(card.screenX).toBeGreaterThanOrEqual(done.screenX);
       expect(app.footer.plainText).toContain("Moving ENG-42 to Done");
       const todo = app.root.findDescendantById("tui-board-column-st-todo") as import("@opentui/core").BoxRenderable;
@@ -663,39 +772,88 @@ describe("mouse-first Kanban board", () => {
 
       move.resolve({ id: "st-done", name: "Done", color: "#9ece6a", type: "completed" });
       await setup.waitFor(() => app.footer.plainText.includes("ENG-42 moved to Done"));
+      await Bun.sleep(60); await setup.flush();
+      expect(app.footer.plainText).toContain("drag move");
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
-  test("a move invalidates an older refresh result", async () => {
+  test("same-scope refresh preserves cards but disables moves until a failed refresh settles", async () => {
     const setup = await createTestRenderer({ width: 140, height: 30 });
-    const staleRefresh = deferred<TuiIssue[]>();
-    const move = deferred<TuiIssue["state"]>();
+    const refresh = deferred<TuiIssue[]>();
+    const moves: { issueId: string; stateId: string }[] = [];
     let loads = 0;
-    const store = new TuiIssueStore(async () => ++loads < 3 ? [issues[0]!] : staleRefresh.promise);
     const app = new TuiApp(
       setup.renderer,
-      store,
-      { ...appOptions(), initialTeamId: "team-eng", moveIssue: async () => move.promise },
+      new TuiIssueStore(async () => ++loads < 3 ? [issues[0]!] : refresh.promise),
+      { ...appOptions(), initialTeamId: "team-eng", moveIssue: async (issueId, stateId) => {
+        moves.push({ issueId, stateId }); return issues[0]!.state;
+      } },
     );
     try {
       app.start(); await setup.waitFor(() => loads === 1); await setup.flush();
       setup.mockInput.pressKey("b");
       await setup.waitFor(() => loads === 2 && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
+      const card = app.root.findDescendantById("tui-board-card-ENG-42");
       const pendingRefresh = app.refresh();
       await setup.waitFor(() => loads === 3); await setup.flush();
-      expect(app.root.findDescendantById("tui-board-card-ENG-42")).toBeUndefined();
+      expect(app.root.findDescendantById("tui-board-card-ENG-42")).toBe(card);
+      app.board.handleKeyPress({ name: "right", shift: true, preventDefault() {} } as import("@opentui/core").KeyEvent);
+      await setup.flush();
+      expect(moves).toHaveLength(0);
+      refresh.reject(new Error("refresh failed")); await pendingRefresh; await setup.flush();
+      expect(app.footer.plainText).toContain("Could not refresh");
+      expect(app.root.findDescendantById("tui-board-card-ENG-42")).toBe(card);
+      app.board.handleKeyPress({ name: "right", shift: true, preventDefault() {} } as import("@opentui/core").KeyEvent);
+      await setup.flush();
+      expect(moves).toHaveLength(0);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("failed moves restore exact horizontal and source-column scroll positions", async () => {
+    const setup = await createTestRenderer({ width: 80, height: 18 });
+    const move = deferred<TuiIssue["state"]>();
+    const sourceIssues = Array.from({ length: 12 }, (_, index): TuiIssue => ({
+      ...issues[0]!, id: `issue-scroll-${index}`, identifier: `PRO-${index}`,
+    }));
+    const boardMeta: Meta = {
+      ...meta,
+      teams: meta.teams.map((team) => team.id === "team-eng" ? {
+        ...team,
+        states: [
+          ...team.states.slice(0, 3),
+          { id: "st-review", name: "In Review", type: "started", position: 1002, color: "#bb9af7" },
+          ...team.states.slice(3),
+        ],
+      } : team),
+    };
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => sourceIssues),
+      { ...appOptions(), meta: boardMeta, initialTeamId: "team-eng", moveIssue: async () => move.promise },
+    );
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === sourceIssues.length); await setup.flush();
+      setup.mockInput.pressKey("b");
+      await setup.waitFor(() => app.board.visible && app.root.findDescendantById("tui-board-card-PRO-11") !== undefined);
+      await setup.flush();
+      const sourceCards = app.root.findDescendantById("tui-board-cards-st-doing") as import("@opentui/core").ScrollBoxRenderable;
+      sourceCards.scrollTop = sourceCards.scrollHeight;
+      app.board.scrollLeft = 20;
+      await setup.flush();
+      const verticalBefore = sourceCards.scrollTop;
+      const horizontalBefore = app.board.scrollLeft;
+      expect(verticalBefore).toBeGreaterThan(0);
+      expect(horizontalBefore).toBeGreaterThan(0);
       app.board.emit(KanbanBoardEvents.ISSUE_DROPPED, {
-        issue: issues[0]!,
-        state: { id: "st-done", name: "Done", type: "completed", position: 4 },
+        issue: sourceIssues.at(-1)!,
+        state: { id: "st-done", name: "Done", type: "completed", position: 4, color: "#9ece6a" },
       });
-      await setup.waitFor(() => app.footer.plainText.includes("Moving ENG-42"));
-      move.resolve({ id: "st-done", name: "Done", color: "#9ece6a", type: "completed" });
-      await setup.waitFor(() => app.footer.plainText.includes("ENG-42 moved to Done"));
-      staleRefresh.resolve([issues[0]!]); await pendingRefresh; await setup.flush();
-      expect(store.state.issues[0]?.state.id).toBe("st-done");
-      const done = app.root.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
-      const card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
-      expect(card.screenX).toBeGreaterThanOrEqual(done.screenX);
+      await setup.waitFor(() => app.footer.plainText.includes("Moving PRO-11")); await setup.flush();
+      expect(sourceCards.scrollTop).toBeLessThan(verticalBefore);
+      move.reject(new Error("network down"));
+      await setup.waitFor(() => app.footer.plainText.includes("Could not move PRO-11")); await setup.flush();
+      expect(sourceCards.scrollTop).toBe(verticalBefore);
+      expect(app.board.scrollLeft).toBe(horizontalBefore);
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
@@ -715,6 +873,7 @@ describe("mouse-first Kanban board", () => {
       await setup.waitFor(() => app.board.visible && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
       await setup.flush();
       let card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      const originalCard = card;
       const doing = app.root.findDescendantById("tui-board-column-st-doing") as import("@opentui/core").BoxRenderable;
       const done = app.root.findDescendantById("tui-board-column-st-done") as import("@opentui/core").BoxRenderable;
 
@@ -733,6 +892,7 @@ describe("mouse-first Kanban board", () => {
       await setup.waitFor(() => app.footer.plainText.includes("Could not move ENG-42")); await setup.flush();
       expect(moves).toEqual([{ issueId: "issue-eng-42", stateId: "st-done" }]);
       card = app.root.findDescendantById("tui-board-card-ENG-42") as import("@opentui/core").BoxRenderable;
+      expect(card).toBe(originalCard);
       expect(card.screenX).toBeGreaterThanOrEqual(doing.screenX);
       expect(card.screenX).toBeLessThan(doing.screenX + doing.width);
     } finally { app.quit(); setup.renderer.destroy(); }

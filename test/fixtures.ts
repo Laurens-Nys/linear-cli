@@ -18,13 +18,13 @@ export const WARM_DATA = {
         name: "Engineering",
         states: {
           nodes: [
-            { id: "st-triage", name: "Triage", type: "triage", position: 0 },
-            { id: "st-backlog", name: "Backlog", type: "backlog", position: 1 },
-            { id: "st-todo", name: "Todo", type: "unstarted", position: 2 },
-            { id: "st-doing", name: "In Progress", type: "started", position: 3 },
-            { id: "st-review", name: "In Review", type: "started", position: 4 },
-            { id: "st-done", name: "Done", type: "completed", position: 5 },
-            { id: "st-canceled", name: "Canceled", type: "canceled", position: 6 },
+            { id: "st-triage", name: "Triage", type: "triage", position: 0, color: "#1abc9c" },
+            { id: "st-backlog", name: "Backlog", type: "backlog", position: 1, color: "#6c6c6c" },
+            { id: "st-todo", name: "Todo", type: "unstarted", position: 2, color: "#a8a8a8" },
+            { id: "st-doing", name: "In Progress", type: "started", position: 3, color: "#e0af68" },
+            { id: "st-review", name: "In Review", type: "started", position: 4, color: "#bb9af7" },
+            { id: "st-done", name: "Done", type: "completed", position: 5, color: "#9ece6a" },
+            { id: "st-canceled", name: "Canceled", type: "canceled", position: 6, color: "#f7768e" },
           ],
         },
         labels: {
@@ -42,8 +42,8 @@ export const WARM_DATA = {
         name: "Design",
         states: {
           nodes: [
-            { id: "ds-todo", name: "Todo", type: "unstarted", position: 0 },
-            { id: "ds-done", name: "Done", type: "completed", position: 1 },
+            { id: "ds-todo", name: "Todo", type: "unstarted", position: 0, color: "#a8a8a8" },
+            { id: "ds-done", name: "Done", type: "completed", position: 1, color: "#9ece6a" },
           ],
         },
         // A second team-scoped "Bug" makes an unqualified lookup ambiguous.
@@ -110,7 +110,7 @@ export const WARM_DATA_WITH_OPS = {
         id: "eeeeeeee-5555-4555-8555-eeeeeeeeeeee",
         key: "OPS",
         name: "Operations",
-        states: { nodes: [{ id: "op-todo", name: "Todo", type: "unstarted", position: 0 }] },
+        states: { nodes: [{ id: "op-todo", name: "Todo", type: "unstarted", position: 0, color: "#a8a8a8" }] },
         labels: { nodes: [] },
         templates: { nodes: [] },
       },

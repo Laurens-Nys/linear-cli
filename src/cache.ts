@@ -13,6 +13,8 @@ export interface CachedState {
   name: string;
   type: string;
   position: number;
+  /** Optional so caches written before state colors were captured remain valid. */
+  color?: string;
 }
 
 export interface CachedLabel {
@@ -154,7 +156,7 @@ export const WARM_QUERY = `query LinWarm {
   teams(first: 50) {
     nodes {
       id key name
-      states(first: 30) { nodes { id name type position } }
+      states(first: 30) { nodes { id name type position color } }
       labels(first: 30) { nodes { id name color parent { name } } }
       templates(first: 10) { nodes { id name type } }
     }
@@ -174,7 +176,7 @@ interface WarmResponse {
       id: string;
       key: string;
       name: string;
-      states: { nodes: { id: string; name: string; type: string; position: number }[] };
+      states: { nodes: { id: string; name: string; type: string; position: number; color: string }[] };
       labels: { nodes: { id: string; name: string; color: string; parent: { name: string } | null }[] };
       templates: { nodes: { id: string; name: string; type: string }[] };
     }[];
@@ -197,6 +199,7 @@ export function toMeta(data: WarmResponse, fingerprint: string, now: Date = new 
       name: state.name,
       type: state.type,
       position: state.position,
+      color: state.color,
     })),
     labels: team.labels.nodes.map((label) => ({
       id: label.id,
