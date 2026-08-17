@@ -91,10 +91,14 @@ describe("TUI issue data", () => {
 });
 
 describe("Linear status presentation", () => {
-  test("maps every workflow category to a single-cell status glyph", () => {
-    expect(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"].map(
+  test("maps every workflow category to one single-cell Material Design icon", () => {
+    const glyphs = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"].map(
       (type) => statusPresentation(type as import("../src/tui/data.ts").TuiWorkflowStateType).glyph,
-    )).toEqual(["◌", "◎", "○", "◐", "●", "×", "×"]);
+    );
+    expect(glyphs.map((glyph) => glyph.codePointAt(0))).toEqual([
+      0xF1853, 0xF0E95, 0xF0766, 0xF1396, 0xF05E0, 0xF0159, 0xF0159,
+    ]);
+    expect(glyphs.every((glyph) => [...glyph].length === 1 && Bun.stringWidth(glyph) === 1)).toBe(true);
   });
 
   test("groups by Linear state name and preserves server sort inside each group", () => {

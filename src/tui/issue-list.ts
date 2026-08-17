@@ -18,13 +18,13 @@ export interface StatusPresentation {
 }
 
 const STATUS_PRESENTATION: Record<TuiWorkflowStateType, StatusPresentation> = {
-  started: { glyph: "◐", fallbackColor: C.yellow },
-  unstarted: { glyph: "○", fallbackColor: C.secondary },
-  backlog: { glyph: "◎", fallbackColor: C.muted },
-  triage: { glyph: "◌", fallbackColor: C.teal },
-  completed: { glyph: "●", fallbackColor: C.green },
-  canceled: { glyph: "×", fallbackColor: C.red },
-  duplicate: { glyph: "×", fallbackColor: C.muted },
+  started: { glyph: "\u{F1396}", fallbackColor: C.yellow }, // circle-half-full
+  unstarted: { glyph: "\u{F0766}", fallbackColor: C.secondary }, // circle-outline
+  backlog: { glyph: "\u{F0E95}", fallbackColor: C.muted }, // circle-double
+  triage: { glyph: "\u{F1853}", fallbackColor: C.teal }, // circle-opacity
+  completed: { glyph: "\u{F05E0}", fallbackColor: C.green }, // check-circle
+  canceled: { glyph: "\u{F0159}", fallbackColor: C.red }, // close-circle
+  duplicate: { glyph: "\u{F0159}", fallbackColor: C.muted }, // close-circle
 };
 
 const STATUS_ORDER: TuiWorkflowStateType[] = [

@@ -25,6 +25,20 @@ bun run build
 cp dist/lin ~/.local/bin/lin
 ```
 
+The noninteractive CLI has no runtime dependencies. The TUI's matched status icons require [Material Design Icons](https://pictogrammers.com/library/mdi/) on every computer that renders the terminal. On macOS:
+
+```sh
+brew install --cask font-material-design-icons-webfont
+```
+
+For Ghostty or cmux, add this to `~/.config/ghostty/config`, then reload the configuration or open a new terminal:
+
+```ini
+font-codepoint-map = U+F0159,U+F05E0,U+F0766,U+F0E95,U+F1396,U+F1853=Material Design Icons
+```
+
+When using `lin` remotely, install and configure the font on the client computer where the terminal appears, not only on the remote host running the command.
+
 ## Quickstart
 
 Create a personal API key in Linear under Settings, Security and access, then:
