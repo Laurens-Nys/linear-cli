@@ -136,12 +136,21 @@ describe("Grok Night", () => {
     });
   });
 
-  test("the TUI canvas is transparent so the terminal color shows through", async () => {
+  test("the TUI canvas and header controls are transparent with one row above them", async () => {
     const setup = await createTestRenderer({ width: 110, height: 30 });
     const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
     try {
-      app.start(); await setup.waitFor(() => app.list.options.length === 2);
+      app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       expect(app.root.backgroundColor.a).toBe(0);
+      expect(app.header.backgroundColor.a).toBe(0);
+      const tabs = app.root.findDescendantById("tui-tabs") as import("@opentui/core").BoxRenderable;
+      expect(tabs.backgroundColor.a).toBe(0);
+      expect(app.viewTabs.started.backgroundColor.a).toBe(0);
+      expect(app.teamChip.backgroundColor.a).toBe(0);
+      expect(app.projectChip.backgroundColor.a).toBe(0);
+      expect(app.sortChip.backgroundColor.a).toBe(0);
+      expect(app.openChip.backgroundColor.a).toBe(0);
+      expect(app.header.screenY).toBe(app.root.screenY + 1);
       expect(app.list.backgroundColor.a).toBe(0);
       expect(app.detail.backgroundColor.a).toBe(0);
     } finally { app.quit(); setup.renderer.destroy(); }
@@ -255,7 +264,7 @@ describe("filters, search, mouse, and focus", () => {
       app.list.setSelectedIndex(15); await setup.flush();
       const visibleIndex = many.findIndex((issue) => {
         const row = app.list.findDescendantById(`tui-issue-row-${issue.identifier}`) as import("@opentui/core").Renderable;
-        return row.screenY >= app.list.screenY && row.screenY < app.list.screenY + app.list.height;
+        return row.screenY > app.list.screenY && row.screenY < app.list.screenY + app.list.height - 1;
       });
       const visibleRow = app.list.findDescendantById(`tui-issue-row-${many[visibleIndex]!.identifier}`) as import("@opentui/core").Renderable;
       await setup.mockMouse.click(visibleRow.screenX + 2, visibleRow.screenY);
@@ -299,7 +308,7 @@ describe("filters, search, mouse, and focus", () => {
       await setup.waitFor(() => queries.length === 2);
       expect(queries[1]?.view).toBe("started");
       expect(app.viewTabs.started.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.accent))).toBe(true);
-      expect(app.viewTabs.all.backgroundColor.equals(RGBA.fromHex(GROK_NIGHT.surface0))).toBe(true);
+      expect(app.viewTabs.all.backgroundColor.a).toBe(0);
       await setup.mockMouse.click(app.viewTabs.completed.screenX + 1, app.viewTabs.completed.screenY);
       await setup.waitFor(() => queries.length === 3);
       expect(queries[2]?.view).toBe("completed");

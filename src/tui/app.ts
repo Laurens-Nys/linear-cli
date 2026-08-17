@@ -179,10 +179,10 @@ export class TuiApp {
 
     this.header = new BoxRenderable(renderer, {
       id: "tui-header", width: "100%", height: 1, flexDirection: "row", gap: 2,
-      backgroundColor: C.surface0, paddingX: 1,
+      backgroundColor: "transparent", paddingX: 1,
     });
     const tabs = new BoxRenderable(renderer, {
-      id: "tui-tabs", height: 1, flexDirection: "row", gap: 1, backgroundColor: C.surface0,
+      id: "tui-tabs", height: 1, flexDirection: "row", gap: 1, backgroundColor: "transparent",
     });
     this.viewTabs = {} as Record<TuiView, BoxRenderable>;
     this.viewTexts = {} as Record<TuiView, TextRenderable>;
@@ -274,11 +274,14 @@ export class TuiApp {
     this.footer = new TextRenderable(renderer, {
       id: "tui-footer", height: 1, fg: C.secondary, selectable: false, content: "",
     });
+    const topSpacer = new BoxRenderable(renderer, {
+      id: "tui-top-spacer", width: "100%", height: 1, flexShrink: 0, backgroundColor: "transparent",
+    });
     this.root = new BoxRenderable(renderer, {
       id: "tui-root", width: "100%", height: "100%", flexDirection: "column",
       backgroundColor: "transparent",
     });
-    this.root.add(this.header); this.root.add(this.main); this.root.add(this.footer); this.root.add(this.searchOverlay);
+    this.root.add(topSpacer); this.root.add(this.header); this.root.add(this.main); this.root.add(this.footer); this.root.add(this.searchOverlay);
 
     this.list.on(IssueListEvents.ITEM_ACTIVATED, (issue: TuiIssue | undefined) => {
       if (!this.reconcilingIssues) this.showIssue(issue);
@@ -443,7 +446,7 @@ export class TuiApp {
     });
     const tab = new BoxRenderable(this.renderer, {
       id: `tui-view-${view}`, height: 1, width: label.length + 2, paddingX: 1,
-      backgroundColor: C.surface0, shouldFill: true,
+      backgroundColor: "transparent", shouldFill: true,
       onMouseDown: (event) => { this.setView(view); event.preventDefault(); },
       onMouseOver: () => this.renderer.setMousePointer("pointer"),
       onMouseOut: () => this.renderer.setMousePointer("default"),
@@ -457,7 +460,7 @@ export class TuiApp {
       id: `tui-${kind}-text`, content: "", fg: kind === "sort" ? C.muted : C.yellow, selectable: false,
     });
     const chip = new BoxRenderable(this.renderer, {
-      id: `tui-${kind}-chip`, height: 1, backgroundColor: C.surface0,
+      id: `tui-${kind}-chip`, height: 1, backgroundColor: "transparent",
       onMouseDown: (event) => {
         const previousFocus = this.detail.focused ? this.detail : this.list;
         this.openPicker(kind, previousFocus);
@@ -474,7 +477,7 @@ export class TuiApp {
       id: "tui-open-text", content: openChipLabel(false), fg: C.blue, selectable: false,
     });
     const chip = new BoxRenderable(this.renderer, {
-      id: "tui-open-chip", height: 1, backgroundColor: C.surface0,
+      id: "tui-open-chip", height: 1, backgroundColor: "transparent",
       onMouseDown: (event) => { this.openInLinear(); event.preventDefault(); },
       onMouseOver: () => this.renderer.setMousePointer("pointer"),
       onMouseOut: () => this.renderer.setMousePointer("default"),
@@ -559,7 +562,7 @@ export class TuiApp {
       const tab = this.viewTabs[view];
       text.content = label;
       text.fg = active ? C.base : C.secondary;
-      tab.backgroundColor = active ? C.accent : C.surface0;
+      tab.backgroundColor = active ? C.accent : "transparent";
       tab.width = label.length + 2;
     }
     const teamLabel = chipLabel("team", team?.key ?? "all", compact);
