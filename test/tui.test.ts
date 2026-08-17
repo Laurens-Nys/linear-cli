@@ -448,7 +448,7 @@ describe("mouse-first Kanban board", () => {
     ]);
   });
 
-  test("cards are compact and transparent, and scrollbars render only their thumb", async () => {
+  test("cards are compact, transparent, and separated while scrollbars render only their thumb", async () => {
     const setup = await createTestRenderer({ width: 90, height: 24 });
     const board = new KanbanBoardRenderable(setup.renderer);
     setup.renderer.root.add(board);
@@ -462,7 +462,7 @@ describe("mouse-first Kanban board", () => {
     const cards = board.findDescendantById("tui-board-cards-st-doing") as import("@opentui/core").ScrollBoxRenderable;
     expect(first.height).toBe(2);
     expect(first.backgroundColor.a).toBe(0);
-    expect(second.screenY - first.screenY).toBe(2);
+    expect(second.screenY - first.screenY).toBe(3);
     expect(cards.verticalScrollBar.slider.backgroundColor.a).toBe(0);
     expect(board.horizontalScrollBar.slider.backgroundColor.a).toBe(0);
     setup.renderer.destroy();

@@ -202,7 +202,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
     const cards = new ScrollBoxRenderable(this.ctx, {
       id: `tui-board-cards-${state.id}`, width: "100%", flexGrow: 1, scrollY: true,
       backgroundColor: "transparent", viewportCulling: true,
-      contentOptions: { flexDirection: "column", backgroundColor: "transparent" },
+      contentOptions: { flexDirection: "column", gap: 1, backgroundColor: "transparent" },
       verticalScrollbarOptions: { showArrows: false, trackOptions: SCROLLBAR_TRACK },
     });
     this.cardLists.set(state.id, cards);
