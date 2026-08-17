@@ -94,7 +94,7 @@ describe("Linear status presentation", () => {
   test("maps every workflow category to a single-cell status glyph", () => {
     expect(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"].map(
       (type) => statusPresentation(type as import("../src/tui/data.ts").TuiWorkflowStateType).glyph,
-    )).toEqual(["◌", "◍", "○", "◐", "✓", "×", "×"]);
+    )).toEqual(["◌", "◎", "○", "◐", "●", "×", "×"]);
   });
 
   test("groups by Linear state name and preserves server sort inside each group", () => {

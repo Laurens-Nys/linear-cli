@@ -20,9 +20,9 @@ export interface StatusPresentation {
 const STATUS_PRESENTATION: Record<TuiWorkflowStateType, StatusPresentation> = {
   started: { glyph: "◐", fallbackColor: C.yellow },
   unstarted: { glyph: "○", fallbackColor: C.secondary },
-  backlog: { glyph: "◍", fallbackColor: C.muted },
+  backlog: { glyph: "◎", fallbackColor: C.muted },
   triage: { glyph: "◌", fallbackColor: C.teal },
-  completed: { glyph: "✓", fallbackColor: C.green },
+  completed: { glyph: "●", fallbackColor: C.green },
   canceled: { glyph: "×", fallbackColor: C.red },
   duplicate: { glyph: "×", fallbackColor: C.muted },
 };
