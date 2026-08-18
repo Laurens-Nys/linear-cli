@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { EXIT, LinError } from "./out.ts";
 
 export interface Config {
   team?: string | undefined;
@@ -14,40 +15,116 @@ export const DEFAULT_LIMIT = 50;
 
 export type TomlValue = string | number | boolean;
 
+const CONFIG_KEYS = ["team", "limit"] as const;
+
+function displayValue(value: unknown): string {
+  return typeof value === "string" ? `"${value}"` : String(value);
+}
+
+function failConfig(source: string, line: number, message: string, hint: string): never {
+  throw new LinError(EXIT.input, `${source}:${line}: ${message}`, hint);
+}
+
+/** Shared wording for `--limit` and `LIN_LIMIT`. */
+export function parseLimitInput(raw: string, name: string): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new LinError(EXIT.input, `${name} needs a number, got "${raw}"`, "example: --limit 20");
+  }
+  return parsed;
+}
+
+function parseLimitValue(value: TomlValue, source: string, line: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  failConfig(source, line, `limit needs a number, got ${displayValue(value)}`, "example: --limit 20");
+}
+
 /**
  * Flat `key = value` TOML. Quoted strings, bare strings, numbers and booleans;
  * `#` starts a comment outside quotes. Tables and arrays are deliberately
- * unsupported: no key in DESIGN.md needs them.
+ * unsupported: no key in DESIGN.md needs them. Unknown keys and malformed
+ * lines fail with the source path and line.
  */
-export function parseToml(text: string): Record<string, TomlValue> {
+export function parseToml(text: string, source = "config"): Record<string, TomlValue> {
   const result: Record<string, TomlValue> = {};
 
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith("[")) continue;
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const lineNo = index + 1;
+    const line = (lines[index] ?? "").trim();
+    if (line === "" || line.startsWith("#")) continue;
+
+    if (line.startsWith("[")) {
+      failConfig(source, lineNo, "tables are not supported", 'use flat keys, for example team = "ENG"');
+    }
 
     const equals = line.indexOf("=");
-    if (equals === -1) continue;
+    if (equals === -1) {
+      failConfig(
+        source,
+        lineNo,
+        "malformed line",
+        'use key = value, for example team = "ENG"',
+      );
+    }
 
     const key = line.slice(0, equals).trim();
-    if (key === "") continue;
-    let value = line.slice(equals + 1).trim();
+    if (key === "") {
+      failConfig(
+        source,
+        lineNo,
+        "malformed line",
+        'use key = value, for example team = "ENG"',
+      );
+    }
 
+    if (!(CONFIG_KEYS as readonly string[]).includes(key)) {
+      failConfig(source, lineNo, `unknown key ${key}`, "supported keys: team, limit");
+    }
+
+    let value = line.slice(equals + 1).trim();
     const quote = value[0];
+    let parsed: TomlValue;
     if (quote === '"' || quote === "'") {
       const close = value.indexOf(quote, 1);
-      if (close === -1) continue; // unterminated string: skip the line
-      result[key] = value.slice(1, close);
+      if (close === -1) {
+        failConfig(
+          source,
+          lineNo,
+          `unterminated string for ${key}`,
+          `close the ${quote} or use ${key} = ${key === "limit" ? "50" : '"ENG"'}`,
+        );
+      }
+      parsed = value.slice(1, close);
+    } else {
+      const comment = value.indexOf("#");
+      if (comment !== -1) value = value.slice(0, comment).trim();
+      if (value === "") {
+        failConfig(
+          source,
+          lineNo,
+          `missing value for ${key}`,
+          `example: ${key} = ${key === "limit" ? "50" : '"ENG"'}`,
+        );
+      }
+      if (value === "true" || value === "false") parsed = value === "true";
+      else if (/^-?\d+(?:\.\d+)?$/.test(value)) parsed = Number(value);
+      else parsed = value;
+    }
+
+    if (key === "team") {
+      if (typeof parsed !== "string" || parsed === "") {
+        failConfig(source, lineNo, `team needs a string, got ${displayValue(parsed)}`, 'example: team = "ENG"');
+      }
+      result[key] = parsed;
       continue;
     }
 
-    const comment = value.indexOf("#");
-    if (comment !== -1) value = value.slice(0, comment).trim();
-    if (value === "") continue;
-
-    if (value === "true" || value === "false") result[key] = value === "true";
-    else if (/^-?\d+(?:\.\d+)?$/.test(value)) result[key] = Number(value);
-    else result[key] = value;
+    result[key] = parseLimitValue(parsed, source, lineNo);
   }
 
   return result;
@@ -55,11 +132,13 @@ export function parseToml(text: string): Record<string, TomlValue> {
 
 function readToml(path: string): Record<string, TomlValue> | undefined {
   if (!existsSync(path)) return undefined;
+  let text: string;
   try {
-    return parseToml(readFileSync(path, "utf8"));
+    text = readFileSync(path, "utf8");
   } catch {
-    return undefined;
+    throw new LinError(EXIT.input, `cannot read config ${path}`, "check that the path is a readable file");
   }
+  return parseToml(text, path);
 }
 
 /** Nearest ancestor directory containing `.git`, if any. */
@@ -124,8 +203,7 @@ export function resolveConfig(
 
   const envLimit = env["LIN_LIMIT"];
   if (envLimit && envLimit !== "") {
-    const parsed = Number(envLimit);
-    if (Number.isFinite(parsed)) config.limit = parsed;
+    config.limit = parseLimitInput(envLimit, "LIN_LIMIT");
   }
 
   if (overrides.team !== undefined && overrides.team !== "") config.team = overrides.team;

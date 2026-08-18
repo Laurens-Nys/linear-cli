@@ -132,6 +132,306 @@ describe("retries", () => {
       box.cleanup();
     }
   });
+
+  test("retry: false does not retry a network failure", async () => {
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinTest", networkError: "connection reset" },
+      { match: "LinTest", data: { viewer: { id: "u1" } } },
+    ]);
+    try {
+      const error = await expectLinError(() =>
+        client.gql(QUERY, undefined, { env: box.env, retry: false }),
+      );
+      expect(error.exitCode).toBe(EXIT.api);
+      expect(error.message).toContain("could not reach the Linear API");
+      expect(stub.calls).toHaveLength(1);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("retry: false does not retry a 5xx", async () => {
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinTest", status: 500, errors: [{ message: "upstream is unhappy" }] },
+      { match: "LinTest", data: { viewer: { id: "u1" } } },
+    ]);
+    try {
+      const error = await expectLinError(() =>
+        client.gql(QUERY, undefined, { env: box.env, retry: false }),
+      );
+      expect(error.exitCode).toBe(EXIT.api);
+      expect(error.message).toBe("upstream is unhappy");
+      expect(stub.calls).toHaveLength(1);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("a mixed 500 then network failure is exactly two attempts", async () => {
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinTest", status: 500, errors: [{ message: "first boom" }] },
+      { match: "LinTest", networkError: "connection reset" },
+      { match: "LinTest", data: { viewer: { id: "u1" } } },
+    ]);
+    try {
+      const error = await expectLinError(() => client.gql(QUERY, undefined, { env: box.env }));
+      expect(error.exitCode).toBe(EXIT.api);
+      expect(error.message).toBe("could not reach the Linear API: connection reset");
+      expect(stub.calls).toHaveLength(2);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("a mixed network then 500 failure is exactly two attempts", async () => {
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinTest", networkError: "connection reset" },
+      { match: "LinTest", status: 500, errors: [{ message: "second boom" }] },
+      { match: "LinTest", data: { viewer: { id: "u1" } } },
+    ]);
+    try {
+      const error = await expectLinError(() => client.gql(QUERY, undefined, { env: box.env }));
+      expect(error.exitCode).toBe(EXIT.api);
+      expect(error.message).toBe("second boom");
+      expect(stub.calls).toHaveLength(2);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("two 500s give up after exactly two attempts", async () => {
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinTest", status: 500, errors: [{ message: "first boom" }] },
+      { match: "LinTest", status: 500, errors: [{ message: "second boom" }] },
+      { match: "LinTest", data: { viewer: { id: "u1" } } },
+    ]);
+    try {
+      const error = await expectLinError(() => client.gql(QUERY, undefined, { env: box.env }));
+      expect(error.exitCode).toBe(EXIT.api);
+      expect(error.message).toBe("second boom");
+      expect(stub.calls).toHaveLength(2);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("two network failures give up after exactly two attempts with the last error", async () => {
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinTest", networkError: "reset 1" },
+      { match: "LinTest", networkError: "reset 2" },
+      { match: "LinTest", data: { viewer: { id: "u1" } } },
+    ]);
+    try {
+      const error = await expectLinError(() => client.gql(QUERY, undefined, { env: box.env }));
+      expect(error.exitCode).toBe(EXIT.api);
+      expect(error.message).toBe("could not reach the Linear API: reset 2");
+      expect(stub.calls).toHaveLength(2);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+});
+
+function hangUntilAborted(_input: string, init: RequestInit): Promise<Response> {
+  return new Promise((_, reject) => {
+    const signal = init.signal;
+    const abort = () => {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (!signal) return;
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+describe("timeout and cancellation", () => {
+  test("the default timeout is a small exported bound", () => {
+    expect(client.REQUEST_TIMEOUT_MS).toBe(30_000);
+  });
+
+  test("a timeout does not retry and names timeout/reachability", async () => {
+    const box = sandbox();
+    let calls = 0;
+    client.setRequestTimeout(20);
+    client.setFetch(async (input, init) => {
+      calls += 1;
+      return hangUntilAborted(input, init);
+    });
+    try {
+      const error = await expectLinError(() => client.gql(QUERY, undefined, { env: box.env }));
+      expect(error.exitCode).toBe(EXIT.api);
+      expect(error.message).toBe("could not reach the Linear API: request timed out");
+      expect(error.hint).toContain("network");
+      expect(error.message).not.toContain("AbortError");
+      expect(error.message).not.toContain("The operation was aborted");
+      expect(calls).toBe(1);
+    } finally {
+      client.resetFetch();
+      client.resetRequestTimeout();
+      box.cleanup();
+    }
+  });
+
+  test("a timeout does not retry even when retry is left on", async () => {
+    const box = sandbox();
+    let calls = 0;
+    client.setRequestTimeout(20);
+    client.setRetryDelay(0);
+    client.setFetch(async (input, init) => {
+      calls += 1;
+      return hangUntilAborted(input, init);
+    });
+    try {
+      await expectLinError(() => client.gqlRaw(QUERY, undefined, { env: box.env }));
+      expect(calls).toBe(1);
+    } finally {
+      client.resetFetch();
+      client.resetRequestTimeout();
+      client.setRetryDelay(300);
+      box.cleanup();
+    }
+  });
+
+  test("caller cancellation does not retry", async () => {
+    const box = sandbox();
+    const controller = new AbortController();
+    let calls = 0;
+    client.setFetch(async (input, init) => {
+      calls += 1;
+      return hangUntilAborted(input, init);
+    });
+    try {
+      const pending = client.gql(QUERY, undefined, { env: box.env, signal: controller.signal });
+      controller.abort();
+      const error = await pending.then(
+        () => {
+          throw new Error("expected cancellation");
+        },
+        (cause) => cause as Error,
+      );
+      expect(error.name).toBe("AbortError");
+      expect(calls).toBe(1);
+    } finally {
+      client.resetFetch();
+      box.cleanup();
+    }
+  });
+
+  test("an already-aborted signal does not fetch", async () => {
+    const box = sandbox();
+    const controller = new AbortController();
+    controller.abort();
+    let calls = 0;
+    client.setFetch(async () => {
+      calls += 1;
+      return new Response("{}");
+    });
+    try {
+      const error = await client
+        .gql(QUERY, undefined, { env: box.env, signal: controller.signal })
+        .then(
+          () => {
+            throw new Error("expected cancellation");
+          },
+          (cause) => cause as Error,
+        );
+      expect(error.name).toBe("AbortError");
+      expect(calls).toBe(0);
+    } finally {
+      client.resetFetch();
+      box.cleanup();
+    }
+  });
+
+  test("caller cancellation wins over a timeout and does not look like a timeout", async () => {
+    const box = sandbox();
+    const controller = new AbortController();
+    let calls = 0;
+    client.setRequestTimeout(50);
+    client.setFetch(async (input, init) => {
+      calls += 1;
+      return hangUntilAborted(input, init);
+    });
+    try {
+      const pending = client.gql(QUERY, undefined, { env: box.env, signal: controller.signal });
+      controller.abort();
+      const error = await pending.then(
+        () => {
+          throw new Error("expected cancellation");
+        },
+        (cause) => cause as Error,
+      );
+      expect(error).not.toBeInstanceOf(LinError);
+      expect(error.name).toBe("AbortError");
+      expect(error.message).not.toContain("timed out");
+      expect(calls).toBe(1);
+    } finally {
+      client.resetFetch();
+      client.resetRequestTimeout();
+      box.cleanup();
+    }
+  });
+
+  test("aborting the caller after success does not throw", async () => {
+    const box = sandbox();
+    const controller = new AbortController();
+    const stub = mock([{ match: "LinTest", data: { viewer: { id: "u1" } } }]);
+    try {
+      await client.gql(QUERY, undefined, { env: box.env, signal: controller.signal });
+      controller.abort();
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("cancelling during the retry backoff skips the second request", async () => {
+    const box = sandbox();
+    const controller = new AbortController();
+    let calls = 0;
+    client.setRetryDelay(80);
+    client.setFetch(async () => {
+      calls += 1;
+      if (calls === 1) {
+        queueMicrotask(() => controller.abort());
+        return new Response(JSON.stringify({ errors: [{ message: "upstream is unhappy" }] }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error("should not retry after cancel");
+    });
+    try {
+      const error = await client
+        .gql(QUERY, undefined, { env: box.env, signal: controller.signal })
+        .then(
+          () => {
+            throw new Error("expected cancellation");
+          },
+          (cause) => cause as Error,
+        );
+      expect(error.name).toBe("AbortError");
+      expect(calls).toBe(1);
+    } finally {
+      client.resetFetch();
+      client.setRetryDelay(300);
+      box.cleanup();
+    }
+  });
 });
 
 describe("GraphQL error mapping", () => {

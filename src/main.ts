@@ -3,7 +3,7 @@
 
 import pkg from "../package.json" with { type: "json" };
 import "./commands/index.ts";
-import { resolveConfig } from "./config.ts";
+import { parseLimitInput, resolveConfig } from "./config.ts";
 import { EXIT, LinError, failFrom, line, setQuiet, type ExitCode } from "./out.ts";
 import {
   allGroups,
@@ -43,13 +43,17 @@ function unknownFlag(token: string, specs: Record<string, FlagSpec>): LinError {
   return new LinError(EXIT.input, `unknown flag ${token}`, `flags: ${names.join(", ")}`);
 }
 
+function parseNumberFlag(name: string, value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new LinError(EXIT.input, `--${name} needs a number, got "${value}"`, `example: --${name} 20`);
+  }
+  return parsed;
+}
+
 function assign(flags: Flags, name: string, spec: FlagSpec, value: string): void {
   if (spec.type === "number") {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-      throw new LinError(EXIT.input, `--${name} needs a number, got "${value}"`, `example: --${name} 20`);
-    }
-    flags[name] = parsed;
+    flags[name] = name === "limit" ? parseLimitInput(value, "--limit") : parseNumberFlag(name, value);
     return;
   }
 

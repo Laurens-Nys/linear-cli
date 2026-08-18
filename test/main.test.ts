@@ -35,6 +35,7 @@ describe("flag parsing", () => {
   test("number flags are parsed, and a non-number is exit 2", () => {
     expect(parseArgs(["--estimate", "3"], SPECS).flags["estimate"]).toBe(3);
     expect(() => parseArgs(["--estimate", "big"], SPECS)).toThrow(/needs a number/);
+    expect(() => parseArgs(["--limit", "many"], SPECS)).toThrow(/--limit needs a number, got "many"/);
   });
 
   test("an unknown flag is exit 2 and lists the valid ones", () => {

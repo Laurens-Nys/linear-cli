@@ -111,7 +111,7 @@ Global flags: `-n/--limit N` (default 50), `--after <cursor>`, `--team KEY`, `-q
 ## Configuration, auth, cache
 
 - Auth: `LINEAR_API_KEY` env var only. Sent as `Authorization: <key>` (no `Bearer` prefix — that is how Linear personal keys work). Missing key: exit 3 with the exact env var name. The key is never printed, logged, or written to disk.
-- Config file `.lin.toml`, discovered: cwd, then git root, then `$XDG_CONFIG_HOME/lin/config.toml` (default `~/.config/lin/config.toml`). Project file wins over global. Flat TOML only (`key = "value"` lines) parsed by a ~20-line internal parser; keys: `team`, `limit`. Env twins `LIN_TEAM`, `LIN_LIMIT` beat file; flags beat everything. No API key in config files.
+- Config file `.lin.toml`, discovered: cwd, then git root, then `$XDG_CONFIG_HOME/lin/config.toml` (default `~/.config/lin/config.toml`). Project file wins over global. Flat TOML only (`key = "value"` lines) parsed by a ~20-line internal parser; keys: `team`, `limit`. Unknown keys, malformed lines, and unreadable files fail with exit 2, naming the file, the offending line/key/value, and the correction. Env twins `LIN_TEAM`, `LIN_LIMIT` beat file; flags beat everything. Invalid `LIN_LIMIT` and `--limit` fail the same way (`needs a number, got "..."`). No API key in config files.
 - Cache: `$XDG_CACHE_HOME/lin/<workspace-urlKey>/meta.json` (default `~/.cache/lin/...`), 24h TTL. Holds the workspace's small vocabularies: teams (with states and labels), users, projects, workspace labels, templates. Name resolution is exact (case-insensitive) against the cache; on miss, refresh once, then fail with candidates (exit 2). Commands that only need the vocabularies still succeed if the cache file cannot be written (sandboxes such as Infisical agent-proxy deny `~/.cache`). `lin cache` shows status, `lin cache warm` refreshes everything, `lin cache clear` deletes.
 - The workspace urlKey comes from `viewer { organization { urlKey } }`, cached with the rest.
 
@@ -214,7 +214,8 @@ Naming trap, verified against the schema: the GraphQL mutation `projectUpdate` e
 - Sub-issue ordering: `issueUpdate(input: { subIssueSortOrder: Float })` positions a child under its parent. `sortOrder` is a different field for board/list position — do not confuse them.
 - File upload: `fileUpload(contentType, filename, size)` → `{ uploadUrl, assetUrl, headers[] }` → HTTP `PUT` of the bytes to `uploadUrl` with the returned headers → then `attachmentCreate` with the `assetUrl`.
 - Rate limits: 2,500 requests/hour and 3,000,000 complexity points/hour per API key; single-query cap 10,000 points. Complexity ≈ 0.1/scalar, 1/object, connections multiply by page size — this is why every query selects only the fields it prints. Budget headers: `X-RateLimit-Requests-Remaining`, `X-Complexity`, etc. On HTTP 400 with `RATELIMITED`, report when the window resets (exit 1).
-- Retries: one retry with short backoff on network errors and 5xx. Never retry 4xx.
+- Timeouts: every GraphQL request has a 30s bound. The error is exit 1 and names timeout/reachability.
+- Retries: one retry with short backoff on network errors and 5xx. Never retry 4xx, timeouts, or cancelled requests.
 - Cycle sugar: `current/next/previous` resolve via the team's `activeCycle` and cycle numbers.
 - Workflow state types: `triage, backlog, unstarted, started, completed, canceled` — `start`/`done`/`triage`/open-state filters key off `type`, never off state names.
 
@@ -224,7 +225,7 @@ Naming trap, verified against the schema: the GraphQL mutation `projectUpdate` e
 src/
   main.ts        arg parsing + routing from the registry; bare-identifier dispatch
   registry.ts    defineCommand(): name, aliases, args, flags, help, examples, run()
-  client.ts      fetch wrapper: auth, one retry, rate headers, GraphQL errors -> LinError
+  client.ts      fetch wrapper: auth, 30s timeout, AbortSignal, one retry, rate headers, GraphQL errors -> LinError
   config.ts      .lin.toml discovery + env + flag precedence
   cache.ts       meta cache read/write/TTL
   resolve.ts     exact name->id resolution for team/state/label/user/project/cycle/template/customer; issue identifier->UUID

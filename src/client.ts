@@ -1,15 +1,21 @@
-// The GraphQL transport. Auth, one retry, rate headers, and the mapping from
-// Linear errors onto our exit-code contract. Commands never call fetch.
+// The GraphQL transport. Auth, timeout, one retry, rate headers, and the
+// mapping from Linear errors onto our exit-code contract. Commands never call fetch.
 
 import { createHash } from "node:crypto";
 import { EXIT, LinError, type ExitCode } from "./out.ts";
 
 export const ENDPOINT = "https://api.linear.app/graphql";
 
+/** Bound on every GraphQL request. Tests may shorten it via `setRequestTimeout`. */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+const TIMEOUT_MESSAGE = "could not reach the Linear API: request timed out";
+
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 let fetchImpl: FetchLike = (input, init) => globalThis.fetch(input, init);
 let retryDelayMs = 300;
+let requestTimeoutMs = REQUEST_TIMEOUT_MS;
 
 /** Tests inject a stub here; nothing else should call this. */
 export function setFetch(impl: FetchLike): void {
@@ -23,6 +29,15 @@ export function resetFetch(): void {
 /** Tests shorten the backoff; the CLI never calls this. */
 export function setRetryDelay(ms: number): void {
   retryDelayMs = ms;
+}
+
+/** Tests shorten the request timeout; the CLI never calls this. */
+export function setRequestTimeout(ms: number): void {
+  requestTimeoutMs = ms;
+}
+
+export function resetRequestTimeout(): void {
+  requestTimeoutMs = REQUEST_TIMEOUT_MS;
 }
 
 // --- rate limit budget ------------------------------------------------------
@@ -150,11 +165,88 @@ export interface GqlOptions {
   /** Set false to disable the single retry (used by mutations that are not idempotent). */
   retry?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Caller cancellation; combined with the request timeout. */
+  signal?: AbortSignal;
 }
 
-const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+function isAbortError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "AbortError";
+}
 
-async function post(body: string, key: string): Promise<Response> {
+function isTimeoutError(cause: unknown): boolean {
+  return cause instanceof LinError && cause.message === TIMEOUT_MESSAGE;
+}
+
+function cancelled(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  if (reason instanceof Error) return reason;
+  const error = new Error("the Linear API request was cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+function timeoutError(): LinError {
+  return new LinError(
+    EXIT.api,
+    TIMEOUT_MESSAGE,
+    "check network connectivity and retry",
+  );
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(cancelled(signal));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(cancelled(signal));
+    };
+    signal?.addEventListener("abort", onAbort);
+  });
+}
+
+function withTimeoutSignal(
+  caller: AbortSignal | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; timedOut: () => boolean; cleanup: () => void } {
+  const controller = new AbortController();
+  let timedOut = false;
+  let cleaned = false;
+
+  const onCallerAbort = () => {
+    controller.abort(caller?.reason);
+  };
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  if (caller) {
+    if (caller.aborted) controller.abort(caller.reason);
+    else caller.addEventListener("abort", onCallerAbort);
+  }
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      clearTimeout(timer);
+      caller?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
+async function post(body: string, key: string, signal: AbortSignal): Promise<Response> {
   return fetchImpl(ENDPOINT, {
     method: "POST",
     headers: {
@@ -164,7 +256,28 @@ async function post(body: string, key: string): Promise<Response> {
       accept: "application/json",
     },
     body,
+    signal,
   });
+}
+
+async function requestOnce(body: string, key: string, caller: AbortSignal | undefined): Promise<Response> {
+  if (caller?.aborted) throw cancelled(caller);
+
+  const timeout = withTimeoutSignal(caller, requestTimeoutMs);
+  try {
+    return await post(body, key, timeout.signal);
+  } catch (cause) {
+    if (caller?.aborted) throw cancelled(caller);
+    if (timeout.timedOut() || isAbortError(cause)) throw timeoutError();
+    throw cause;
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+function throwTransport(cause: unknown): never {
+  if (cause instanceof LinError || isAbortError(cause)) throw cause;
+  throw networkError(cause);
 }
 
 /**
@@ -180,23 +293,28 @@ export async function gqlRaw<T>(
   const key = apiKey(options.env);
   const body = JSON.stringify(variables ? { query: document, variables } : { query: document });
   const mayRetry = options.retry !== false;
+  const caller = options.signal;
+  const attempts = mayRetry ? 2 : 1;
 
-  let response: Response;
-  try {
-    response = await post(body, key);
-    if (response.status >= 500 && mayRetry) {
-      await sleep(retryDelayMs);
-      response = await post(body, key);
-    }
-  } catch (cause) {
-    if (!mayRetry) throw networkError(cause);
-    await sleep(retryDelayMs);
+  // One logical request: at most two HTTP attempts, whether the first failure
+  // is 5xx or a network error. Timeouts, caller cancels, 4xx, and GraphQL
+  // validation never retry.
+  let response: Response | undefined;
+  let lastFailure: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      response = await post(body, key);
-    } catch (retryCause) {
-      throw networkError(retryCause);
+      response = await requestOnce(body, key, caller);
+      lastFailure = undefined;
+      if (response.status < 500 || attempt === attempts) break;
+    } catch (cause) {
+      lastFailure = cause;
+      if (!mayRetry || isAbortError(cause) || isTimeoutError(cause) || attempt === attempts) {
+        throwTransport(cause);
+      }
     }
+    await sleep(retryDelayMs, caller);
   }
+  if (!response) throwTransport(lastFailure);
 
   const rate = captureRateInfo(response.headers);
 

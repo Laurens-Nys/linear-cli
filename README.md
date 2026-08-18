@@ -132,7 +132,7 @@ team = "ENG"
 limit = 50
 ```
 
-`LINEAR_API_KEY` is the only way to authenticate, and it is never printed, logged or written to disk. `LIN_TEAM` and `LIN_LIMIT` override the files; flags override everything.
+Unknown keys, malformed lines, and unreadable files fail with the file path and a correction. `LINEAR_API_KEY` is the only way to authenticate, and it is never printed, logged or written to disk. `LIN_TEAM` and `LIN_LIMIT` override the files; flags override everything. Invalid `LIN_LIMIT` and `--limit` fail with the same `needs a number` wording.
 
 Name lookups for teams, states, labels, users, projects and templates resolve against a cache at `~/.cache/lin/<workspace>/meta.json` with a 24 hour life. `lin cache` shows its age, `lin cache warm` refreshes it, `lin cache clear` deletes it, and `--no-cache` skips it for one command.
 

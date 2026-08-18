@@ -1,35 +1,76 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_LIMIT, findGitRoot, loadConfigFiles, parseToml, resolveConfig } from "../src/config.ts";
+import { DEFAULT_LIMIT, findGitRoot, loadConfigFiles, parseLimitInput, parseToml, resolveConfig } from "../src/config.ts";
+import { EXIT, LinError } from "../src/out.ts";
 import { sandbox } from "./harness.ts";
 
+function expectLinError(run: () => unknown): LinError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(LinError);
+    return error as LinError;
+  }
+  throw new Error("expected a LinError, but the call returned");
+}
+
 describe("the flat TOML parser", () => {
-  test("reads quoted strings, numbers and booleans", () => {
-    expect(parseToml('team = "ENG"\nlimit = 25\nwide = true')).toEqual({ team: "ENG", limit: 25, wide: true });
+  test("reads quoted strings and numbers", () => {
+    expect(parseToml('team = "ENG"\nlimit = 25')).toEqual({ team: "ENG", limit: 25 });
   });
 
-  test("ignores comments, blank lines and table headers", () => {
-    expect(parseToml('# a comment\n\nteam = "ENG"  # trailing\n[section]\nlimit = 10')).toEqual({
+  test("ignores comments and blank lines", () => {
+    expect(parseToml('# a comment\n\nteam = "ENG"  # trailing\nlimit = 10')).toEqual({
       team: "ENG",
       limit: 10,
     });
   });
 
   test("keeps a # that lives inside a quoted string", () => {
-    expect(parseToml('color = "#eb5757"')).toEqual({ color: "#eb5757" });
+    expect(parseToml('team = "#eb5757"')).toEqual({ team: "#eb5757" });
   });
 
   test("accepts single quotes and bare words", () => {
-    expect(parseToml("team = 'DES'\nsort = updated")).toEqual({ team: "DES", sort: "updated" });
+    expect(parseToml("team = 'DES'")).toEqual({ team: "DES" });
+    expect(parseToml("team = ENG")).toEqual({ team: "ENG" });
   });
 
-  test("skips malformed lines instead of throwing", () => {
-    expect(parseToml('nonsense\n= 5\nteam = "ENG"\nunterminated = "oops')).toEqual({ team: "ENG" });
+  test("throws on a malformed line without echoing its potentially sensitive text", () => {
+    const error = expectLinError(() => parseToml('LINEAR_API_KEY secret\nteam = "ENG"', "/tmp/.lin.toml"));
+    expect(error.exitCode).toBe(EXIT.input);
+    expect(error.message).toContain("/tmp/.lin.toml:1");
+    expect(error.message).toContain("malformed line");
+    expect(error.message).not.toContain("secret");
+    expect(error.hint).toContain("team = \"ENG\"");
+  });
+
+  test("throws on an empty key, an unterminated string, and a table header", () => {
+    expect(expectLinError(() => parseToml("= 5")).message).toContain("malformed line");
+    expect(expectLinError(() => parseToml('team = "oops')).message).toContain("unterminated string");
+    expect(expectLinError(() => parseToml("[section]\nteam = \"ENG\"")).message).toContain(
+      "tables are not supported",
+    );
+  });
+
+  test("throws on an unknown key instead of ignoring it", () => {
+    const error = expectLinError(() => parseToml('team = "ENG"\nwide = true', "/tmp/.lin.toml"));
+    expect(error.exitCode).toBe(EXIT.input);
+    expect(error.message).toContain("/tmp/.lin.toml:2");
+    expect(error.message).toContain("unknown key wide");
+    expect(error.hint).toBe("supported keys: team, limit");
+  });
+
+  test("throws when limit is not a number", () => {
+    const error = expectLinError(() => parseToml("limit = true", "/tmp/.lin.toml"));
+    expect(error.message).toContain("/tmp/.lin.toml:1");
+    expect(error.message).toContain("limit needs a number, got true");
+    expect(error.hint).toContain("--limit 20");
   });
 
   test("handles negative and fractional numbers", () => {
-    expect(parseToml("a = -3\nb = 2.5")).toEqual({ a: -3, b: 2.5 });
+    expect(parseToml("limit = -3")).toEqual({ limit: -3 });
+    expect(parseToml("limit = 2.5")).toEqual({ limit: 2.5 });
   });
 });
 
@@ -130,10 +171,45 @@ describe("precedence: flag > env > project > global", () => {
     }
   });
 
-  test("an unparseable LIN_LIMIT is ignored rather than fatal", () => {
+  test("an unparseable LIN_LIMIT is fatal with the same wording as --limit", () => {
     const box = sandbox();
     try {
-      expect(resolveConfig({}, box.dir, { ...box.env, LIN_LIMIT: "many" }).limit).toBe(DEFAULT_LIMIT);
+      const error = expectLinError(() => resolveConfig({}, box.dir, { ...box.env, LIN_LIMIT: "many" }));
+      expect(error.exitCode).toBe(EXIT.input);
+      expect(error.message).toBe('LIN_LIMIT needs a number, got "many"');
+      expect(error.hint).toBe("example: --limit 20");
+      const flagError = expectLinError(() => parseLimitInput("many", "--limit"));
+      expect(flagError.message).toBe('--limit needs a number, got "many"');
+      expect(flagError.hint).toBe(error.hint);
+    } finally {
+      box.cleanup();
+    }
+  });
+
+  test("an unknown key in a project file fails with the path instead of being skipped", () => {
+    const box = withFiles();
+    try {
+      writeFileSync(join(box.project, ".lin.toml"), 'team = "ENG"\napi_key = "secret"\n');
+      const error = expectLinError(() => resolveConfig({}, box.project, box.env));
+      expect(error.exitCode).toBe(EXIT.input);
+      expect(error.message).toContain(join(box.project, ".lin.toml"));
+      expect(error.message).toContain("unknown key api_key");
+      expect(error.message).not.toContain("secret");
+    } finally {
+      box.cleanup();
+    }
+  });
+
+  test("an unreadable config file fails with its path", () => {
+    const box = sandbox();
+    try {
+      const project = join(box.dir, "project");
+      const path = join(project, ".lin.toml");
+      mkdirSync(path, { recursive: true });
+      const error = expectLinError(() => loadConfigFiles(project, box.env));
+      expect(error.exitCode).toBe(EXIT.input);
+      expect(error.message).toBe(`cannot read config ${path}`);
+      expect(error.hint).toContain("readable file");
     } finally {
       box.cleanup();
     }
