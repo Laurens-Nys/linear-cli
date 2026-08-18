@@ -240,6 +240,7 @@ describe("load", () => {
       for (const field of ["viewer", "teams(", "states(", "labels(", "templates(", "users(", "projects(", "organization"]) {
         expect(document).toContain(field);
       }
+      expect(document).toContain("teams(first: 20)");
       expect(document).toContain(
         "states(first: 30) { nodes { id name type position color } pageInfo { hasNextPage endCursor } }",
       );

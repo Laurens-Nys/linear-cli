@@ -160,11 +160,11 @@ export function clear(env: NodeJS.ProcessEnv = process.env): string[] {
 
 // --- warming ----------------------------------------------------------------
 
-// First-page sizes stay inside Linear's 10,000 point single-query cap
-// (~3,000 points live). Remaining pages are fetched one connection at a time
-// so a large workspace cannot drop entities and cannot blow the cap.
+// First-page sizes stay inside Linear's 10,000 point single-query cap.
+// `teams: 50` measured 11,898.6 points live in August 2026; 20 leaves safe
+// headroom. Remaining pages are fetched one connection at a time.
 const PAGE = {
-  teams: 50,
+  teams: 20,
   states: 30,
   labels: 30,
   templates: 10,
