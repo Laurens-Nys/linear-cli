@@ -3,6 +3,7 @@ import {
   type CliRenderer,
   fg,
   type KeyEvent,
+  MouseButton,
   RenderableEvents,
   ScrollBoxRenderable,
   type SelectOption,
@@ -66,6 +67,7 @@ function date(value: string): string {
 export const IssueListEvents = {
   ITEM_ACTIVATED: "issueActivated",
   ITEM_OPENED: "issueOpened",
+  ITEM_ACTIONED: "issueActioned",
 } as const;
 
 export class IssueListRenderable extends ScrollBoxRenderable {
@@ -171,7 +173,8 @@ export class IssueListRenderable extends ScrollBoxRenderable {
       onMouseDown: (event) => {
         this.setSelectedIndex(index);
         this.focus();
-        this.emit(IssueListEvents.ITEM_ACTIVATED, issue);
+        if (event.button === MouseButton.RIGHT) this.emit(IssueListEvents.ITEM_ACTIONED, issue);
+        else this.emit(IssueListEvents.ITEM_ACTIVATED, issue);
         event.preventDefault();
       },
     });

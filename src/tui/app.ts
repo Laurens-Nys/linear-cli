@@ -9,7 +9,6 @@ import {
   type Renderable,
   RenderableEvents,
   ScrollBoxRenderable,
-  SelectRenderable,
   SelectRenderableEvents,
   SyntaxStyle,
   TextRenderable,
@@ -17,65 +16,47 @@ import {
 } from "@opentui/core";
 import type { CachedProject, CachedTeam, Meta } from "../cache.ts";
 import {
+  BrowserInput,
+  FocusSelect,
+  firstTeamState,
+  issueTeam,
+  priorityLabel,
+  TuiActionMenu,
+  TuiCommentComposer,
+  tuiIssueActions,
+  visibleSelectOffset,
+  type TuiActionDispatch,
+} from "./actions.ts";
+import {
+  createTuiComment,
   type TuiIssue,
   type TuiIssueQuery,
   TuiIssueStore,
   formatTuiCount,
   isTuiAbortError,
   moveTuiIssue,
+  updateTuiIssuePriority,
   TUI_SORT_LABELS,
   TUI_SORT_SHORT,
   TUI_VIEW_LABELS,
   TUI_VIEWS,
   type TuiSort,
   type TuiView,
+  type TuiWorkflowStateType,
 } from "./data.ts";
-import { KanbanBoardEvents, KanbanBoardRenderable, type KanbanDrop } from "./board.ts";
+import { KanbanBoardEvents, KanbanBoardRenderable, type KanbanDrop, type KanbanState } from "./board.ts";
 import { IssueListEvents, IssueListRenderable } from "./issue-list.ts";
 import { issueDetail, issueMarkdownRenderNode } from "./markdown.ts";
 import { isRemoteSession, issueOpenUrl, openExternalUrl } from "./open.ts";
 import { GROK_NIGHT as C, GROK_NIGHT_MARKDOWN } from "./theme.ts";
 
-export { issueDetail };
+export { issueDetail, visibleSelectOffset };
 export type PickerKind = "team" | "project" | "sort";
 type PickerValue = CachedTeam | CachedProject | { id: TuiSort; name: string } | null;
 
 const VIEW_TABS: { view: TuiView; key: string }[] = TUI_VIEWS.map((view, index) => ({
   view, key: String(index + 1),
 }));
-
-class FocusSelect extends SelectRenderable {
-  selectionFill: string = C.surface1;
-
-  constructor(renderer: CliRenderer, options: ConstructorParameters<typeof SelectRenderable>[1]) {
-    super(renderer, { ...options, selectedBackgroundColor: C.surface1 });
-    this.on(RenderableEvents.FOCUSED, () => {
-      this.selectionFill = C.surface2;
-      this.selectedBackgroundColor = C.surface2;
-    });
-    this.on(RenderableEvents.BLURRED, () => {
-      this.selectionFill = C.surface1;
-      this.selectedBackgroundColor = C.surface1;
-    });
-  }
-}
-
-class BrowserInput extends InputRenderable {
-  onEscapePressed?: () => void;
-  onDownPressed?: () => void;
-
-  override handleKeyPress(key: KeyEvent): boolean {
-    if (key.name === "escape" || key.name === "esc") {
-      this.onEscapePressed?.();
-      return true;
-    }
-    if (key.name === "down" && this.onDownPressed) {
-      this.onDownPressed();
-      return true;
-    }
-    return super.handleKeyPress(key);
-  }
-}
 
 export interface TuiAppOptions {
   limit: number;
@@ -86,6 +67,8 @@ export interface TuiAppOptions {
   openExternal?: (url: string) => Promise<void> | void;
   copyToClipboard?: (text: string) => boolean;
   moveIssue?: (issueId: string, stateId: string) => Promise<TuiIssue["state"]>;
+  updatePriority?: (issueId: string, priority: number) => Promise<number>;
+  createComment?: (issueId: string, body: string) => Promise<{ id: string } | void>;
   moveNoticeDurationMs?: number;
 }
 
@@ -121,23 +104,12 @@ export function footerHint(
 ): string {
   if (searching) return "enter apply  ·  esc cancel";
   if (listHidden) {
-    return compact ? "esc back  ·  q quit" : "esc back  ·  / search  ·  r refresh  ·  q quit";
+    return compact ? "esc back  ·  q quit" : "esc back  ·  / search  ·  a actions  ·  r refresh  ·  q quit";
   }
   if (layout === "board") {
-    return compact ? "drag move  ·  b list  ·  q quit" : "drag move  ·  click open  ·  b list  ·  / search  ·  r refresh  ·  q quit";
+    return compact ? "drag move  ·  b list  ·  q quit" : "drag move  ·  click open  ·  a actions  ·  b list  ·  / search  ·  r refresh  ·  q quit";
   }
-  return compact ? "/ search  ·  q quit" : "/ search  ·  r refresh  ·  q quit";
-}
-
-/** Mirrors OpenTUI 0.5.1 SelectRenderable's visible-window calculation without reading its private scrollOffset. */
-export function visibleSelectOffset(
-  selectedIndex: number,
-  optionCount: number,
-  height: number,
-  linesPerItem: number,
-): number {
-  const visibleCount = Math.max(1, Math.floor(height / linesPerItem));
-  return Math.max(0, Math.min(selectedIndex - Math.floor(visibleCount / 2), optionCount - visibleCount));
+  return compact ? "/ search  ·  q quit" : "/ search  ·  a actions  ·  r refresh  ·  q quit";
 }
 
 export class TuiApp {
@@ -199,6 +171,8 @@ export class TuiApp {
     all: SelectOption[];
     previousFocus: Renderable;
   };
+  private actions?: { menu: TuiActionMenu; previousFocus: Renderable };
+  private comment?: { composer: TuiCommentComposer; previousFocus: Renderable };
 
   constructor(
     private readonly renderer: CliRenderer,
@@ -321,7 +295,9 @@ export class TuiApp {
       if (!this.reconcilingIssues) this.showIssue(issue);
     });
     this.list.on(IssueListEvents.ITEM_OPENED, () => this.openSelectedIssue());
+    this.list.on(IssueListEvents.ITEM_ACTIONED, (issue: TuiIssue) => this.openActions(issue));
     this.board.on(KanbanBoardEvents.ITEM_OPENED, (issue: TuiIssue) => this.openIssue(issue));
+    this.board.on(KanbanBoardEvents.ITEM_ACTIONED, (issue: TuiIssue) => this.openActions(issue));
     this.board.on(KanbanBoardEvents.ISSUE_DROPPED, (drop: KanbanDrop) => { void this.moveBoardIssue(drop); });
     this.board.on(KanbanBoardEvents.DRAG_TARGET_CHANGED, (drop: KanbanDrop | undefined) => {
       this.dragHint = drop ? `Move ${drop.issue.identifier} to ${drop.state.name}` : "";
@@ -431,11 +407,15 @@ export class TuiApp {
     this.stopped = true; this.generation += 1; this.detailGeneration += 1;
     this.store.abort();
     if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
+    this.actions?.menu.destroy();
+    this.actions = undefined;
+    this.comment?.composer.destroy();
+    this.comment = undefined;
     this.options.onQuit?.();
   }
 
   openPicker(kind: PickerKind, previousFocus?: Renderable): void {
-    if (this.pendingMove || this.picker || this.searchOverlay.visible) return;
+    if (this.pendingMove || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
     const primary = this.primaryPane();
     const restoreFocus: Renderable = previousFocus ?? (this.detail.focused ? this.detail : this.search.focused ? this.search : primary.focused ? primary : this.lastContentFocus ?? primary);
     this.lastContentFocus = restoreFocus;
@@ -516,6 +496,34 @@ export class TuiApp {
     });
   }
 
+  openActions(issue?: TuiIssue, previousFocus?: Renderable): void {
+    if (this.pendingMove || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
+    const target = issue ?? this.actionTarget();
+    if (!target) return;
+    const primary = this.primaryPane();
+    const restoreFocus: Renderable = previousFocus ?? (this.detail.focused ? this.detail : primary.focused ? primary : this.lastContentFocus ?? primary);
+    this.lastContentFocus = restoreFocus;
+    if (this.layout === "list") this.showIssue(target);
+    const menu = new TuiActionMenu(this.renderer, this.root, target, {
+      items: tuiIssueActions(target, issueTeam(this.options.meta, target)),
+      onCommit: (dispatch) => this.commitAction(dispatch),
+      onClose: () => this.closeActions(),
+    });
+    this.actions = { menu, previousFocus: restoreFocus };
+  }
+
+  closeActions(): void {
+    const actions = this.actions;
+    if (!actions) return;
+    this.actions = undefined;
+    actions.menu.destroy();
+    queueMicrotask(() => {
+      if (this.stopped || this.renderer.isDestroyed || this.actions || this.comment || this.picker) return;
+      actions.previousFocus.focus();
+      this.renderer.focusRenderable(actions.previousFocus);
+    });
+  }
+
   private primaryPane(): IssueListRenderable | KanbanBoardRenderable {
     return this.layout === "board" ? this.board : this.list;
   }
@@ -557,10 +565,15 @@ export class TuiApp {
   }
 
   private async moveBoardIssue({ issue, state }: KanbanDrop): Promise<void> {
+    await this.moveIssueToState(issue, state);
+  }
+
+  private async moveIssueToState(issue: TuiIssue, state: KanbanState): Promise<void> {
     if (this.pendingMove || issue.state.id === state.id) return;
     const current = this.store.state.issues.find((item) => item.id === issue.id);
     if (!current) return;
-    const scrollSnapshot = this.board.captureScrollState();
+    const onBoard = this.layout === "board";
+    const scrollSnapshot = onBoard ? this.board.captureScrollState() : undefined;
     this.pendingMove = true;
     this.store.abortList();
     this.generation += 1;
@@ -579,7 +592,7 @@ export class TuiApp {
     };
     this.store.replace(optimistic);
     this.renderIssues(this.store.state.issues, issue.identifier);
-    this.board.setMoving(issue.identifier);
+    if (onBoard) this.board.setMoving(issue.identifier);
     if (this.detailIssueId === issue.identifier) this.showIssue(optimistic);
     this.updateHeader(); this.updateFooter();
     try {
@@ -594,7 +607,7 @@ export class TuiApp {
       if (this.stopped || this.renderer.isDestroyed) return;
       this.store.replace(current);
       this.renderIssues(this.store.state.issues, issue.identifier);
-      this.board.restoreScrollState(scrollSnapshot);
+      if (scrollSnapshot) this.board.restoreScrollState(scrollSnapshot);
       if (this.detailIssueId === issue.identifier) this.showIssue(current);
       const message = error instanceof Error ? error.message : String(error);
       this.notice = "";
@@ -602,7 +615,7 @@ export class TuiApp {
     } finally {
       this.pendingMove = false;
       if (!this.stopped && !this.renderer.isDestroyed) {
-        this.board.setMoving();
+        if (onBoard) this.board.setMoving();
         this.updateHeader(); this.updateFooter();
       }
     }
@@ -722,7 +735,7 @@ export class TuiApp {
   }
 
   private openSearch(previousFocus?: Renderable): void {
-    if (this.pendingMove || this.picker) return;
+    if (this.pendingMove || this.picker || this.actions || this.comment) return;
     const primary = this.primaryPane();
     this.lastContentFocus = previousFocus ?? (this.detail.focused ? this.detail : primary.focused ? primary : this.lastContentFocus ?? primary);
     this.search.value = this.appliedTitle;
@@ -903,8 +916,170 @@ export class TuiApp {
     return this.store.state.issues.find((issue) => issue.identifier === this.detailIssueId);
   }
 
-  openInLinear(): void {
-    const issue = this.shownIssue();
+  private actionTarget(): TuiIssue | undefined {
+    if (this.primaryPane().focused) return this.primaryPane().getSelectedIssue() ?? this.shownIssue();
+    return this.shownIssue() ?? this.primaryPane().getSelectedIssue();
+  }
+
+  private commitAction(dispatch: TuiActionDispatch): void {
+    if (dispatch.type === "priority-menu") {
+      this.actions?.menu.showPriority();
+      return;
+    }
+    const issue = this.actions?.menu.issue;
+    const previousFocus = this.actions?.previousFocus;
+    this.closeActions();
+    if (!issue) return;
+    if (dispatch.type === "open") this.openInLinear(issue);
+    else if (dispatch.type === "copy-id") this.copyText(issue.identifier, `copied ${issue.identifier}`);
+    else if (dispatch.type === "copy-url") this.copyText(issue.url, "copied URL");
+    else if (dispatch.type === "start") this.moveToType(issue, "started");
+    else if (dispatch.type === "done") this.moveToType(issue, "completed");
+    else if (dispatch.type === "priority") void this.setPriority(issue, dispatch.priority);
+    else if (dispatch.type === "comment") this.openComment(issue, previousFocus);
+  }
+
+  private copyText(text: string, success: string): void {
+    const copied = (this.options.copyToClipboard ?? ((value: string) => this.renderer.copyToClipboardOSC52(value)))(text);
+    if (copied) {
+      this.errorMessage = "";
+      this.notice = success;
+    } else {
+      this.notice = "";
+      this.errorMessage = "Could not copy to this Mac";
+    }
+    this.updateFooter();
+  }
+
+  private moveToType(issue: TuiIssue, type: TuiWorkflowStateType): void {
+    const current = this.store.state.issues.find((item) => item.id === issue.id) ?? issue;
+    const state = firstTeamState(issueTeam(this.options.meta, current), type);
+    if (!state) {
+      this.notice = "";
+      this.errorMessage = `No ${type} state on ${current.team.key}`;
+      this.updateFooter();
+      return;
+    }
+    void this.moveIssueToState(current, {
+      id: state.id,
+      name: state.name,
+      type,
+      position: state.position,
+      color: state.color,
+    });
+  }
+
+  private async setPriority(issue: TuiIssue, priority: number): Promise<void> {
+    if (this.pendingMove) return;
+    const current = this.store.state.issues.find((item) => item.id === issue.id);
+    if (!current) return;
+    this.pendingMove = true;
+    this.store.abortList();
+    this.generation += 1;
+    if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
+    this.moveNoticeTimer = undefined;
+    this.notice = `Setting ${issue.identifier} to ${priorityLabel(priority)}…`;
+    this.errorMessage = "";
+    const optimistic = { ...current, priority };
+    this.store.replace(optimistic);
+    this.renderIssues(this.store.state.issues, issue.identifier);
+    if (this.detailIssueId === issue.identifier) this.showIssue(optimistic);
+    this.updateHeader(); this.updateFooter();
+    try {
+      const next = await (this.options.updatePriority ?? updateTuiIssuePriority)(issue.id, priority);
+      if (this.stopped || this.renderer.isDestroyed) return;
+      const updated = { ...optimistic, priority: next };
+      this.store.replace(updated);
+      this.renderIssues(this.store.state.issues, issue.identifier);
+      if (this.detailIssueId === issue.identifier) this.showIssue(updated);
+      this.showMoveConfirmation(`${issue.identifier} set to ${priorityLabel(next)}`);
+    } catch (error) {
+      if (this.stopped || this.renderer.isDestroyed) return;
+      this.store.replace(current);
+      this.renderIssues(this.store.state.issues, issue.identifier);
+      if (this.detailIssueId === issue.identifier) this.showIssue(current);
+      const message = error instanceof Error ? error.message : String(error);
+      this.notice = "";
+      this.errorMessage = `Could not set priority on ${issue.identifier}: ${message}`;
+    } finally {
+      this.pendingMove = false;
+      if (!this.stopped && !this.renderer.isDestroyed) {
+        this.updateHeader(); this.updateFooter();
+      }
+    }
+  }
+
+  private openComment(issue: TuiIssue, previousFocus?: Renderable): void {
+    if (this.pendingMove || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
+    const primary = this.primaryPane();
+    const restoreFocus: Renderable = previousFocus ?? (this.detail.focused ? this.detail : primary.focused ? primary : this.lastContentFocus ?? primary);
+    this.lastContentFocus = restoreFocus;
+    const composer = new TuiCommentComposer(this.renderer, this.root, issue, {
+      onSubmit: (body) => { void this.submitComment(body); },
+      onClose: () => this.closeComment(),
+    });
+    this.comment = { composer, previousFocus: restoreFocus };
+  }
+
+  private closeComment(): void {
+    const comment = this.comment;
+    if (!comment || comment.composer.isSaving) return;
+    this.comment = undefined;
+    comment.composer.destroy();
+    queueMicrotask(() => {
+      if (!this.stopped && !this.renderer.isDestroyed) {
+        comment.previousFocus.focus();
+        this.renderer.focusRenderable(comment.previousFocus);
+      }
+    });
+  }
+
+  private async submitComment(raw: string): Promise<void> {
+    const composer = this.comment?.composer;
+    if (!composer || composer.isSaving) return;
+    const body = raw.trim();
+    if (body === "") {
+      composer.setError("Comment cannot be empty");
+      return;
+    }
+    const issue = this.store.state.issues.find((item) => item.id === composer.issue.id) ?? composer.issue;
+    composer.setSaving();
+    this.pendingMove = true;
+    this.errorMessage = "";
+    this.notice = "";
+    this.updateFooter();
+    try {
+      await (this.options.createComment ?? createTuiComment)(issue.id, body);
+      if (this.stopped || this.renderer.isDestroyed) return;
+      this.store.invalidateDetail(issue.id);
+      const restore = this.comment?.previousFocus ?? this.lastContentFocus;
+      this.comment = undefined;
+      composer.destroy();
+      queueMicrotask(() => {
+        if (!this.stopped && !this.renderer.isDestroyed && restore) {
+          restore.focus();
+          this.renderer.focusRenderable(restore);
+        }
+      });
+      this.errorMessage = "";
+      this.showMoveConfirmation(`Commented on ${issue.identifier}`);
+      if (this.detailIssueId === issue.identifier) void this.loadShownDetail(issue);
+    } catch (error) {
+      if (this.stopped || this.renderer.isDestroyed) return;
+      const message = error instanceof Error ? error.message : String(error);
+      composer.setError(`Could not comment: ${message}`);
+      this.notice = "";
+      this.errorMessage = `Could not comment on ${issue.identifier}: ${message}`;
+      this.updateFooter();
+    } finally {
+      this.pendingMove = false;
+      if (!this.stopped && !this.renderer.isDestroyed) {
+        this.updateHeader(); this.updateFooter();
+      }
+    }
+  }
+
+  openInLinear(issue = this.shownIssue()): void {
     if (!issue) return;
     const remote = this.options.remote ?? isRemoteSession();
     const url = issueOpenUrl(issue.url, remote);
@@ -939,6 +1114,17 @@ export class TuiApp {
 
   private handleGlobalKey(key: KeyEvent): void {
     if (key.ctrl && key.name === "c") { key.preventDefault(); this.quit(); return; }
+    if (this.comment) {
+      if ((key.name === "escape" || key.name === "esc") && !this.comment.composer.isSaving) {
+        key.preventDefault(); this.closeComment();
+      }
+      return;
+    }
+    if (this.actions) {
+      if ((key.name === "escape" || key.name === "esc")) { key.preventDefault(); this.actions.menu.handleEscape(); return; }
+      if (this.actions.menu.input.focused && key.name === "down") { key.preventDefault(); this.actions.menu.list.focus(); }
+      return;
+    }
     if (this.picker) {
       if ((key.name === "escape" || key.name === "esc")) { key.preventDefault(); this.closePicker(); return; }
       if (this.picker.input.focused && key.name === "down") { key.preventDefault(); this.picker.list.focus(); }
@@ -965,6 +1151,7 @@ export class TuiApp {
     if (key.name === "z") { key.preventDefault(); this.toggleListPane(); return; }
     if (key.name === "b") { key.preventDefault(); this.toggleLayout(); return; }
     if (key.name === "/") { key.preventDefault(); this.openSearch(); return; }
+    if (key.name === "a") { key.preventDefault(); this.openActions(); return; }
     const viewIndex = this.layout === "list" ? VIEW_TABS.find((tab) => tab.key === key.name) : undefined;
     if (viewIndex) { key.preventDefault(); this.setView(viewIndex.view); return; }
     if (key.name === "t") { key.preventDefault(); this.openPicker("team"); return; }

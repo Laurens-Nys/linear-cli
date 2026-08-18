@@ -3,6 +3,7 @@ import {
   type CliRenderer,
   fg,
   type KeyEvent,
+  MouseButton,
   RenderableEvents,
   ScrollBoxRenderable,
   t,
@@ -29,6 +30,7 @@ export interface KanbanScrollSnapshot {
 
 export const KanbanBoardEvents = {
   ITEM_OPENED: "kanbanItemOpened",
+  ITEM_ACTIONED: "kanbanItemActioned",
   ISSUE_DROPPED: "kanbanIssueDropped",
   DRAG_TARGET_CHANGED: "kanbanDragTargetChanged",
 } as const;
@@ -355,11 +357,16 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
       flexShrink: 0, flexDirection: "column", paddingX: 1, backgroundColor: "transparent",
       onMouseDown: (event) => {
         if (!this.interactive || this.movingIdentifier) { this.renderer.setMousePointer("not-allowed"); event.preventDefault(); return; }
+        this.selectIssueByIdentifier(issue.identifier);
+        this.focus();
+        if (event.button === MouseButton.RIGHT) {
+          this.emit(KanbanBoardEvents.ITEM_ACTIONED, issue);
+          event.preventDefault();
+          return;
+        }
         this.pressedIdentifier = issue.identifier;
         this.pressX = event.x;
         this.pressY = event.y;
-        this.selectIssueByIdentifier(issue.identifier);
-        this.focus();
         event.preventDefault();
       },
       onMouseOver: () => {

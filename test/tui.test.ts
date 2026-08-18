@@ -8,9 +8,10 @@ import { isRemoteSession, issueOpenUrl, linearAppUrl, openCommand } from "../src
 import { groupIssuesByState, statusPresentation } from "../src/tui/issue-list.ts";
 import { issueDetail, renderMermaidForWidth } from "../src/tui/markdown.ts";
 import {
-  asTuiIssuePage, formatTuiCount, isTuiAbortError, loadTuiIssueDetail, loadTuiIssues, moveTuiIssue,
-  sortTuiComments, TuiIssueStore, tuiIssueVariables, tuiStateFilter, TUI_ISSUE_DETAIL_DOCUMENT,
-  TUI_ISSUES_DOCUMENT, TUI_SORTS, type TuiIssue, type TuiIssueDetail, type TuiIssueQuery,
+  asTuiIssuePage, createTuiComment, formatTuiCount, isTuiAbortError, loadTuiIssueDetail, loadTuiIssues, moveTuiIssue,
+  sortTuiComments, TuiIssueStore, tuiIssueVariables, tuiStateFilter, updateTuiIssuePriority,
+  TUI_COMMENT_DOCUMENT, TUI_ISSUE_DETAIL_DOCUMENT, TUI_ISSUES_DOCUMENT, TUI_PRIORITY_DOCUMENT, TUI_SORTS,
+  type TuiIssue, type TuiIssueDetail, type TuiIssueQuery,
 } from "../src/tui/data.ts";
 import { runTui } from "../src/tui/run.ts";
 import { GROK_NIGHT } from "../src/tui/theme.ts";
@@ -82,6 +83,8 @@ function appOptions(onQuit?: () => void, extras: {
   openExternal?: (url: string) => Promise<void> | void;
   copyToClipboard?: (text: string) => boolean;
   moveIssue?: (issueId: string, stateId: string) => Promise<TuiIssue["state"]>;
+  updatePriority?: (issueId: string, priority: number) => Promise<number>;
+  createComment?: (issueId: string, body: string) => Promise<{ id: string } | void>;
   moveNoticeDurationMs?: number;
 } = {}) {
   return { limit: 25, meta, onQuit, remote: extras.remote ?? false, ...extras };
@@ -141,6 +144,33 @@ describe("TUI issue data", () => {
       id: "st-done", name: "Done", color: "#9ece6a", type: "completed",
     });
     expect(net.calls[0]?.variables).toEqual({ id: "issue-eng-42", stateId: "st-done" });
+  });
+
+  test("priority and comment writes are named and do not retry", async () => {
+    expect(TUI_PRIORITY_DOCUMENT).toContain("mutation LinTuiSetPriority");
+    expect(TUI_COMMENT_DOCUMENT).toContain("mutation LinTuiCommentCreate");
+    net.restore();
+    net = mock([
+      { match: "LinTuiSetPriority", data: { issueUpdate: { issue: { id: "issue-eng-42", identifier: "ENG-42", priority: 1 } } } },
+      { match: "LinTuiCommentCreate", data: { commentCreate: { comment: { id: "c-new" } } } },
+    ]);
+    await expect(updateTuiIssuePriority("issue-eng-42", 1)).resolves.toBe(1);
+    expect(net.calls[0]?.variables).toEqual({ id: "issue-eng-42", priority: 1 });
+    await expect(createTuiComment("issue-eng-42", "Looks good.")).resolves.toEqual({ id: "c-new" });
+    expect(net.calls[1]?.variables).toEqual({ input: { issueId: "issue-eng-42", body: "Looks good." } });
+  });
+
+  test("priority and comment writes do not retry a failed mutation", async () => {
+    net.restore();
+    net = mock([
+      { match: "LinTuiSetPriority", networkError: "offline" },
+      { match: "LinTuiSetPriority", data: { issueUpdate: { issue: { priority: 1 } } } },
+      { match: "LinTuiCommentCreate", networkError: "offline" },
+      { match: "LinTuiCommentCreate", data: { commentCreate: { comment: { id: "c-new" } } } },
+    ]);
+    await expect(updateTuiIssuePriority("issue-eng-42", 1)).rejects.toThrow("offline");
+    await expect(createTuiComment("issue-eng-42", "Looks good.")).rejects.toThrow("offline");
+    expect(net.calls).toHaveLength(2);
   });
 
   test("board moves do not retry a failed write", async () => {
@@ -1830,8 +1860,8 @@ describe("responsive controls", () => {
     expect(chipLabel("team", "all", false)).toBe("Team all ▾");
     expect(chipLabel("project", "Reliability", false)).toBe("Project Reliability ▾");
     expect(chipLabel("sort", "updated", false)).toBe("Sort updated ▾");
-    expect(footerHint(false, false)).toBe("/ search  ·  r refresh  ·  q quit");
-    expect(footerHint(true, false)).toBe("esc back  ·  / search  ·  r refresh  ·  q quit");
+    expect(footerHint(false, false)).toBe("/ search  ·  a actions  ·  r refresh  ·  q quit");
+    expect(footerHint(true, false)).toBe("esc back  ·  / search  ·  a actions  ·  r refresh  ·  q quit");
     expect(footerHint(false, true)).toBe("/ search  ·  q quit");
     for (const width of [110, 60, 40]) {
       const setup = await createTestRenderer({ width, height: 28 });

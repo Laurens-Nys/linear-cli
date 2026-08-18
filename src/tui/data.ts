@@ -230,7 +230,7 @@ export async function loadTuiIssueDetail(id: string, signal?: AbortSignal): Prom
   };
 }
 
-const TUI_MOVE_DOCUMENT = `mutation LinTuiMoveIssue($id: String!, $stateId: String!) {
+export const TUI_MOVE_DOCUMENT = `mutation LinTuiMoveIssue($id: String!, $stateId: String!) {
   issueUpdate(id: $id, input: { stateId: $stateId }) {
     issue { id identifier state { id name color type } }
   }
@@ -247,6 +247,42 @@ export async function moveTuiIssue(
     { retry: false, signal },
   );
   return data.issueUpdate.issue.state;
+}
+
+export const TUI_PRIORITY_DOCUMENT = `mutation LinTuiSetPriority($id: String!, $priority: Int!) {
+  issueUpdate(id: $id, input: { priority: $priority }) {
+    issue { id identifier priority }
+  }
+}`;
+
+export const TUI_COMMENT_DOCUMENT = `mutation LinTuiCommentCreate($input: CommentCreateInput!) {
+  commentCreate(input: $input) { comment { id } }
+}`;
+
+export async function updateTuiIssuePriority(
+  issueId: string,
+  priority: number,
+  signal?: AbortSignal,
+): Promise<number> {
+  const data = await gql<{ issueUpdate: { issue: { priority: number } } }>(
+    TUI_PRIORITY_DOCUMENT,
+    { id: issueId, priority },
+    { retry: false, signal },
+  );
+  return data.issueUpdate.issue.priority;
+}
+
+export async function createTuiComment(
+  issueId: string,
+  body: string,
+  signal?: AbortSignal,
+): Promise<{ id: string }> {
+  const data = await gql<{ commentCreate: { comment: { id: string } } }>(
+    TUI_COMMENT_DOCUMENT,
+    { input: { issueId, body } },
+    { retry: false, signal },
+  );
+  return data.commentCreate.comment;
 }
 
 export type TuiLoadState =
