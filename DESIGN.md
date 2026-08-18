@@ -97,6 +97,7 @@ Full form: `lin <noun> <verb> [args] [flags]`. Top-level aliases for the hot pat
 |---|---|
 | `lin ENG-42` | bare identifier is always `issue view` |
 | `lin ls` | my open issues (assignee = me, state type not completed/canceled), most recently updated first |
+| `lin today` | assigned open issues that are started, overdue, urgent/high, or blocked. Workspace-wide unless `--team` or config team is set. Reasons are the matching facts, comma-separated in that order (`started,overdue,urgent/high,blocked`). Sort: started, then overdue, urgent, high, blocked; ties break by priority (urgent→none), earlier due (missing last), newer updated, then id. Fetches every matching assigned open page, then applies `-n`; `--after` is rejected. A cut table continues with `# N more · lin today -n <total>` | rows `{id,title,state,priority,due,reason,updated}` |
 | `lin start [id]` | assign me + move to the team's first `started`-type state + print the suggested branch name |
 | `lin done [id]` | move to the team's first `completed`-type state; id inferred from the current git branch when omitted |
 | `lin triage [--team X]` | issues in the team's triage state, oldest first |
@@ -106,7 +107,7 @@ Full form: `lin <noun> <verb> [args] [flags]`. Top-level aliases for the hot pat
 - Branch inference: extract `[A-Z]+-\d+` (case-insensitive) from the current git branch name.
 - Team defaults come from config; `--team` overrides.
 
-Global flags: `-n/--limit N` (default 50), `--after <cursor>`, `--all-pages` (fetch every remaining page; only the declared paginated list commands `issue list`, `ls`, `triage`, `comment`, and `search` accept it — others fail before any request), `--fields a,b,c` (select and order columns on table commands; bare `--fields` lists the available ones and exits 2; non-table commands reject it before execution), `--team KEY`, `-q/--quiet`, `--no-cache`, `--version`, `-h/--help`. `lin --help` lists every command grouped by noun; `lin <noun> --help` lists that noun's commands; `lin <command> -h` prints one command's arguments, flags and examples. `--all` is not global: on `inbox` / `inbox read` / `inbox archive` it means include-read or bulk, never pagination. `lin api --paginate` stays the raw GraphQL walker and fails if `hasNextPage` is true without a usable `endCursor` or if a cursor repeats.
+Global flags: `-n/--limit N` (default 50), `--after <cursor>`, `--all-pages` (fetch every remaining page; only the declared paginated list commands `issue list`, `ls`, `triage`, `comment`, and `search` accept it — others fail before any request; `today` always walks internally and applies `-n` after ranking), `--fields a,b,c` (select and order columns on table commands; bare `--fields` lists the available ones and exits 2; non-table commands reject it before execution), `--team KEY`, `-q/--quiet`, `--no-cache`, `--version`, `-h/--help`. `lin --help` lists every command grouped by noun; `lin <noun> --help` lists that noun's commands; `lin <command> -h` prints one command's arguments, flags and examples. `--all` is not global: on `inbox` / `inbox read` / `inbox archive` it means include-read or bulk, never pagination. `lin api --paginate` stays the raw GraphQL walker and fails if `hasNextPage` is true without a usable `endCursor` or if a cursor repeats.
 
 ## Configuration, auth, cache
 

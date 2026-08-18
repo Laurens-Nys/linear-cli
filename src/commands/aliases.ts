@@ -1,6 +1,6 @@
 // owned by: alias agent
-// The hot path: ls, start, done, triage, search. Each is a whole command rather
-// than a flag preset, because the defaults differ from the verbs they shorten.
+// The hot path: ls, today, start, done, triage, search. Each is a whole command
+// rather than a flag preset, because the defaults differ from the verbs they shorten.
 // Bare-identifier dispatch (`lin ENG-42`) lives in main.ts.
 
 import { gql } from "../client.ts";
@@ -13,6 +13,13 @@ import {
   resolveTeam,
   resolveUser,
 } from "../resolve.ts";
+import {
+  collectToday,
+  localYmd,
+  resolveTodayTeam,
+  TODAY_COLUMNS,
+  truncateToday,
+} from "../today.ts";
 import {
   allPagesContinuation,
   clip,
@@ -466,5 +473,27 @@ export const searchCommand = defineCommand({
         { more: searchSectionMore(page.nodes.length, data.searchDocuments.totalCount, page.pageInfo, allPages, term, flags) },
       );
     }
+  },
+});
+
+// --- today ------------------------------------------------------------------
+
+export const todayCommand = defineCommand({
+  name: "today",
+  group: "alias",
+  summary: "my started, overdue, urgent, high, or blocked issues, ordered by transparent reasons",
+  fields: TODAY_COLUMNS,
+  examples: ["lin today --team ENG", "lin today", "lin today -n 20"],
+  async run({ flags, config }) {
+    if (flagString(flags, "after") !== undefined) {
+      throw new LinError(EXIT.input, "--after is not supported on today", "today always fetches every matching page before ranking");
+    }
+    selectColumns(TODAY_COLUMNS);
+    const rows = await collectToday({
+      teamId: await resolveTodayTeam(config, flags),
+      today: localYmd(),
+    });
+    const { shown, more } = truncateToday(rows, limitOf(config), flags);
+    table("issues", shown, TODAY_COLUMNS, { more });
   },
 });

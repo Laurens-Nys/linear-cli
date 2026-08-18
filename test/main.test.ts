@@ -242,6 +242,7 @@ describe("dispatch", () => {
       "team list",
       "team states",
       "template list",
+      "today",
       "triage",
       "user list",
     ]);

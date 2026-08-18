@@ -47,6 +47,7 @@ Create a personal API key in Linear Settings > Security & access > Personal API 
 export LINEAR_API_KEY
 lin doctor               # setup checks: key, API, config, cache, TUI
 lin auth                 # who the key is, which workspace, how much rate budget is left
+lin today                # started, overdue, urgent/high, or blocked assigned issues
 lin ls                   # my open issues, most recently updated first
 lin ENG-42               # a bare identifier is always issue view
 lin issue create --team ENG -t "Fix login redirect loop" --label Bug --assignee casey
@@ -103,7 +104,7 @@ Exit codes are part of the contract: `0` ok, `1` API or network, `2` correctable
 
 ## Commands
 
-Full form is `lin <noun> <verb> [args] [flags]`. Top-level shortcuts cover the hot path: `lin ENG-42`, `lin ls`, `lin start`, `lin done`, `lin triage`, `lin search "term"`.
+Full form is `lin <noun> <verb> [args] [flags]`. Top-level shortcuts cover the hot path: `lin ENG-42`, `lin today`, `lin ls`, `lin start`, `lin done`, `lin triage`, `lin search "term"`.
 
 | noun | verbs |
 |---|---|
