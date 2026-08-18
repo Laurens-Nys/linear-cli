@@ -5,6 +5,7 @@ import {
   actionSelectOptions,
   filterNamedOptions,
   firstTeamState,
+  issueSelectOptions,
   issueTeam,
   priorityLabel,
   prioritySelectOptions,
@@ -108,6 +109,18 @@ describe("TUI action catalog", () => {
     expect(prioritySelectOptions().map((option) => option.name)).toEqual([
       "Urgent", "High", "Medium", "Low", "No priority",
     ]);
+    expect(issueSelectOptions(issues).map((option) => option.name)).toEqual([
+      "ENG-42  Fix login redirect", "APP-4  Rotate webhook secrets",
+    ]);
+    expect(filterNamedOptions([
+      ...actionSelectOptions(eng),
+      ...issueSelectOptions(issues),
+    ], "ENG-42").map((option) => option.name)).toEqual([
+      "ENG-42  Fix login redirect", "Copy ENG-42",
+    ]);
+    expect(filterNamedOptions(actionSelectOptions(eng), "ENG-42").map((option) => option.name)).toEqual([
+      "Copy ENG-42",
+    ]);
   });
 
   test("footer names the action key without adding chrome", () => {
@@ -179,6 +192,9 @@ describe("TUI action menu", () => {
       setup.mockInput.pressKey("j"); await setup.flush();
       setup.mockInput.pressKey("a"); await setup.flush();
       expect((app.root.findDescendantById("tui-actions") as import("@opentui/core").BoxRenderable).title).toBe("APP-4");
+      expect(actionNames()[0]).toBe("Open in Linear");
+      expect(actionNames()).toContain("ENG-42  Fix login redirect");
+      expect(actionNames()).toContain("APP-4  Rotate webhook secrets");
       await setup.mockInput.typeText("copy"); await setup.flush();
       expect(actionNames()).toEqual(["Copy APP-4", "Copy URL"]);
     } finally { setup.renderer.destroy(); }
@@ -234,6 +250,7 @@ describe("TUI action menu", () => {
       expect(modal.title).toBe("ENG-42");
       expect(actionNames()).toEqual([
         "Open in Linear", "Copy ENG-42", "Copy URL", "Move to In Progress", "Move to Done", "Set priority", "Add comment",
+        "ENG-42  Fix login redirect", "APP-4  Rotate webhook secrets",
       ]);
       expect(app.root.findDescendantById("tui-actions-search")?.focused).toBe(true);
 

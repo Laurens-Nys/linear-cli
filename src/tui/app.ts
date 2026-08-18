@@ -70,6 +70,8 @@ export interface TuiAppOptions {
   updatePriority?: (issueId: string, priority: number) => Promise<number>;
   createComment?: (issueId: string, body: string) => Promise<{ id: string } | void>;
   moveNoticeDurationMs?: number;
+  undoDurationMs?: number;
+  backgroundRefreshMs?: number;
 }
 
 function clip(value: string, length: number): string {
@@ -160,6 +162,12 @@ export class TuiApp {
   private boardQueryKey: string | undefined;
   private dragHint = "";
   private moveNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  private undoTimer: ReturnType<typeof setTimeout> | undefined;
+  private backgroundTimer: ReturnType<typeof setInterval> | undefined;
+  private refreshInFlight = false;
+  private refreshToken = 0;
+  private offline = false;
+  private undo: { issue: TuiIssue; currentStateId: string } | undefined;
   private lastMarkdownWidth = 0;
   private preserveDetailScroll = false;
   private lastContentFocus?: Renderable;
@@ -281,6 +289,11 @@ export class TuiApp {
 
     this.footer = new TextRenderable(renderer, {
       id: "tui-footer", height: 1, fg: C.secondary, selectable: false, content: "",
+      onMouseDown: (event) => {
+        if (this.canClickUndo()) { void this.undoMove(); event.preventDefault(); }
+      },
+      onMouseOver: () => { if (this.canClickUndo()) this.renderer.setMousePointer("pointer"); },
+      onMouseOut: () => this.renderer.setMousePointer("default"),
     });
     const topSpacer = new BoxRenderable(renderer, {
       id: "tui-top-spacer", width: "100%", height: 1, flexShrink: 0, backgroundColor: "transparent",
@@ -324,7 +337,11 @@ export class TuiApp {
   }
 
   mount(): void { this.renderer.root.add(this.root); this.list.focus(); }
-  start(): void { this.mount(); void this.refresh(); }
+  start(): void {
+    this.mount();
+    this.scheduleBackgroundRefresh();
+    void this.refresh();
+  }
 
   currentQuery(): TuiIssueQuery {
     return {
@@ -333,8 +350,12 @@ export class TuiApp {
     };
   }
 
-  async refresh(): Promise<void> {
+  async refresh(options?: { quiet?: boolean }): Promise<void> {
+    const quiet = options?.quiet === true;
     if (this.pendingMove) return;
+    if (quiet && (this.refreshInFlight || this.shouldSkipQuietRefresh())) return;
+    const token = ++this.refreshToken;
+    this.refreshInFlight = true;
     const generation = ++this.generation;
     const query = { ...this.currentQuery() };
     const boardKey = this.layout === "board" ? this.boardScopeKey(query) : undefined;
@@ -343,30 +364,38 @@ export class TuiApp {
       this.board.setBoard([], []);
       this.board.setInteractive(false);
       this.boardQueryKey = undefined;
+      if (this.refreshToken === token) this.refreshInFlight = false;
       this.updateHeader();
       return;
     }
-    if (this.layout === "board") {
-      if (boardKey !== this.boardQueryKey) this.board.setBoard(this.selectedTeam()?.states ?? [], []);
-      this.board.setInteractive(false);
+    if (!quiet) {
+      if (this.layout === "board") {
+        if (boardKey !== this.boardQueryKey) this.board.setBoard(this.selectedTeam()?.states ?? [], []);
+        this.board.setInteractive(false);
+      }
+      this.store.loading();
+      this.errorMessage = "";
+      this.updateHeader();
+      this.updateFooter();
     }
-    this.store.loading();
-    this.errorMessage = "";
-    this.updateHeader();
-    this.updateFooter();
     try {
       const page = await this.store.load(query);
       if (generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
+      if (quiet && this.shouldSkipQuietRefresh()) return;
+      const boardScroll = quiet && this.layout === "board" ? this.board.captureScrollState() : undefined;
       const state = this.store.ready(page);
       const currentId = (this.layout === "board" ? this.board.getSelectedIssue() : this.list.getSelectedIssue())?.identifier;
       const selectedId = currentId && state.issues.some((issue) => issue.identifier === currentId)
         ? currentId
         : undefined;
-      this.renderIssues(state.issues, selectedId);
+      this.renderIssues(state.issues, selectedId, { preserveScroll: quiet });
+      if (boardScroll) this.board.restoreScrollState(boardScroll);
       if (this.layout === "board") {
         this.boardQueryKey = boardKey;
         this.board.setInteractive(true);
       }
+      this.offline = false;
+      if (this.errorMessage.startsWith("Could not refresh")) this.errorMessage = "";
       if (state.issues.length === 0) {
         this.detailGeneration += 1;
         this.store.abortDetail();
@@ -384,6 +413,11 @@ export class TuiApp {
       this.updateFooter();
     } catch (error) {
       if (isTuiAbortError(error) || generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
+      if (quiet) {
+        this.offline = true;
+        this.updateFooter();
+        return;
+      }
       const state = this.store.error(error);
       const message = state.kind === "error" ? state.message : String(error);
       this.errorMessage = `Could not refresh: ${message}  ·  press r to retry`;
@@ -399,6 +433,8 @@ export class TuiApp {
       }
       this.updateHeader();
       this.updateFooter();
+    } finally {
+      if (this.refreshToken === token) this.refreshInFlight = false;
     }
   }
 
@@ -406,7 +442,15 @@ export class TuiApp {
     if (this.stopped) return;
     this.stopped = true; this.generation += 1; this.detailGeneration += 1;
     this.store.abort();
+    this.refreshToken += 1;
+    this.refreshInFlight = false;
     if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
+    if (this.undoTimer) clearTimeout(this.undoTimer);
+    if (this.backgroundTimer) clearInterval(this.backgroundTimer);
+    this.moveNoticeTimer = undefined;
+    this.undoTimer = undefined;
+    this.backgroundTimer = undefined;
+    this.undo = undefined;
     this.actions?.menu.destroy();
     this.actions = undefined;
     this.comment?.composer.destroy();
@@ -497,8 +541,16 @@ export class TuiApp {
   }
 
   openActions(issue?: TuiIssue, previousFocus?: Renderable): void {
+    this.openActionMenu(issue ?? this.actionTarget(), previousFocus, false);
+  }
+
+  openPalette(previousFocus?: Renderable): void {
+    this.openActionMenu(this.actionTarget(), previousFocus, true);
+  }
+
+  private openActionMenu(issue: TuiIssue | undefined, previousFocus: Renderable | undefined, includeIssues: boolean): void {
     if (this.pendingMove || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
-    const target = issue ?? this.actionTarget();
+    const target = issue;
     if (!target) return;
     const primary = this.primaryPane();
     const restoreFocus: Renderable = previousFocus ?? (this.detail.focused ? this.detail : primary.focused ? primary : this.lastContentFocus ?? primary);
@@ -506,6 +558,7 @@ export class TuiApp {
     if (this.layout === "list") this.showIssue(target);
     const menu = new TuiActionMenu(this.renderer, this.root, target, {
       items: tuiIssueActions(target, issueTeam(this.options.meta, target)),
+      issues: includeIssues ? this.store.state.issues : undefined,
       onCommit: (dispatch) => this.commitAction(dispatch),
       onClose: () => this.closeActions(),
     });
@@ -543,9 +596,9 @@ export class TuiApp {
     });
   }
 
-  private renderIssues(issues: readonly TuiIssue[], selectedIdentifier?: string): void {
+  private renderIssues(issues: readonly TuiIssue[], selectedIdentifier?: string, options?: { preserveScroll?: boolean }): void {
     this.reconcilingIssues = true;
-    this.list.setIssues(issues, selectedIdentifier);
+    this.list.setIssues(issues, selectedIdentifier, options);
     if (this.layout === "board") {
       this.board.setBoard(this.selectedTeam()?.states ?? [], issues, selectedIdentifier);
     }
@@ -568,10 +621,11 @@ export class TuiApp {
     await this.moveIssueToState(issue, state);
   }
 
-  private async moveIssueToState(issue: TuiIssue, state: KanbanState): Promise<void> {
+  private async moveIssueToState(issue: TuiIssue, state: KanbanState, options?: { undo?: boolean }): Promise<void> {
     if (this.pendingMove || issue.state.id === state.id) return;
     const current = this.store.state.issues.find((item) => item.id === issue.id);
     if (!current) return;
+    const reversing = options?.undo === true;
     const onBoard = this.layout === "board";
     const scrollSnapshot = onBoard ? this.board.captureScrollState() : undefined;
     this.pendingMove = true;
@@ -579,7 +633,10 @@ export class TuiApp {
     this.generation += 1;
     if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
     this.moveNoticeTimer = undefined;
-    this.notice = `Moving ${issue.identifier} to ${state.name}…`;
+    if (!reversing) this.discardUndo();
+    this.notice = reversing
+      ? `Restoring ${issue.identifier}…`
+      : `Moving ${issue.identifier} to ${state.name}…`;
     this.errorMessage = "";
     const optimistic: TuiIssue = {
       ...current,
@@ -602,7 +659,12 @@ export class TuiApp {
       this.store.replace(moved);
       this.renderIssues(this.store.state.issues, issue.identifier);
       if (this.detailIssueId === issue.identifier) this.showIssue(moved);
-      this.showMoveConfirmation(`${issue.identifier} moved to ${movedState.name}`);
+      if (reversing) {
+        this.undo = undefined;
+        this.showMoveConfirmation(`Restored ${issue.identifier}`);
+      } else {
+        this.armUndo(current, moved);
+      }
     } catch (error) {
       if (this.stopped || this.renderer.isDestroyed) return;
       this.store.replace(current);
@@ -611,7 +673,10 @@ export class TuiApp {
       if (this.detailIssueId === issue.identifier) this.showIssue(current);
       const message = error instanceof Error ? error.message : String(error);
       this.notice = "";
-      this.errorMessage = `Could not move ${issue.identifier}: ${message}`;
+      if (reversing) this.undo = undefined;
+      this.errorMessage = reversing
+        ? `Could not undo ${issue.identifier}: ${message}`
+        : `Could not move ${issue.identifier}: ${message}`;
     } finally {
       this.pendingMove = false;
       if (!this.stopped && !this.renderer.isDestroyed) {
@@ -630,6 +695,91 @@ export class TuiApp {
       if (this.notice === message) this.notice = "";
       if (!this.stopped && !this.renderer.isDestroyed) this.updateFooter();
     }, duration);
+  }
+
+  private undoNotice(issue: TuiIssue): string {
+    return `Moved ${issue.identifier} to ${issue.state.name} · u undo`;
+  }
+
+  private canClickUndo(): boolean {
+    return this.undo !== undefined && this.notice.includes("u undo") && !this.pendingMove;
+  }
+
+  private clearUndoTimer(): void {
+    if (this.undoTimer) clearTimeout(this.undoTimer);
+    this.undoTimer = undefined;
+  }
+
+  private discardUndo(): void {
+    this.clearUndoTimer();
+    this.undo = undefined;
+  }
+
+  private armUndo(previous: TuiIssue, moved: TuiIssue): void {
+    this.clearUndoTimer();
+    this.undo = { issue: previous, currentStateId: moved.state.id };
+    const message = this.undoNotice(moved);
+    this.notice = message;
+    this.errorMessage = "";
+    this.undoTimer = setTimeout(() => {
+      this.undoTimer = undefined;
+      if (this.undo?.issue.id === previous.id && this.undo.currentStateId === moved.state.id) {
+        this.undo = undefined;
+      }
+      if (this.notice === message) this.notice = "";
+      if (!this.stopped && !this.renderer.isDestroyed) this.updateFooter();
+    }, this.options.undoDurationMs ?? 8000);
+  }
+
+  private async undoMove(): Promise<void> {
+    const snapshot = this.undo;
+    if (!snapshot || this.pendingMove) return;
+    const current = this.store.state.issues.find((item) => item.id === snapshot.issue.id);
+    if (!current || current.state.id !== snapshot.currentStateId) {
+      this.undo = undefined;
+      this.clearUndoTimer();
+      this.notice = "";
+      this.errorMessage = `Could not undo ${snapshot.issue.identifier}: state changed`;
+      this.updateFooter();
+      return;
+    }
+    this.undo = undefined;
+    this.clearUndoTimer();
+    await this.moveIssueToState(current, {
+      id: snapshot.issue.state.id,
+      name: snapshot.issue.state.name,
+      type: snapshot.issue.state.type,
+      position: 0,
+      color: snapshot.issue.state.color,
+    }, { undo: true });
+  }
+
+  private shouldSkipQuietRefresh(): boolean {
+    return this.pendingMove
+      || this.undo !== undefined
+      || this.picker !== undefined
+      || this.actions !== undefined
+      || this.comment !== undefined
+      || this.searchOverlay.visible
+      || this.board.isDragging;
+  }
+
+  private scheduleBackgroundRefresh(): void {
+    const ms = this.options.backgroundRefreshMs ?? 30_000;
+    if (ms <= 0) return;
+    this.backgroundTimer = setInterval(() => { void this.refresh({ quiet: true }); }, ms);
+  }
+
+  private selectAndOpenIssue(identifier: string): void {
+    const issue = this.store.state.issues.find((item) => item.identifier === identifier);
+    if (!issue) return;
+    this.list.selectIdentifier(identifier);
+    this.board.selectIdentifier(identifier);
+    if (this.layout === "board" || this.listHidden || this.renderer.terminalWidth < 80) {
+      this.openIssue(issue);
+      return;
+    }
+    this.showIssue(issue);
   }
 
   private makeViewTab(view: TuiView): [BoxRenderable, TextRenderable] {
@@ -926,6 +1076,11 @@ export class TuiApp {
       this.actions?.menu.showPriority();
       return;
     }
+    if (dispatch.type === "select-issue") {
+      this.closeActions();
+      this.selectAndOpenIssue(dispatch.identifier);
+      return;
+    }
     const issue = this.actions?.menu.issue;
     const previousFocus = this.actions?.previousFocus;
     this.closeActions();
@@ -1151,7 +1306,8 @@ export class TuiApp {
     if (key.name === "z") { key.preventDefault(); this.toggleListPane(); return; }
     if (key.name === "b") { key.preventDefault(); this.toggleLayout(); return; }
     if (key.name === "/") { key.preventDefault(); this.openSearch(); return; }
-    if (key.name === "a") { key.preventDefault(); this.openActions(); return; }
+    if (key.name === "a") { key.preventDefault(); this.openPalette(); return; }
+    if (key.name === "u") { key.preventDefault(); void this.undoMove(); return; }
     const viewIndex = this.layout === "list" ? VIEW_TABS.find((tab) => tab.key === key.name) : undefined;
     if (viewIndex) { key.preventDefault(); this.setView(viewIndex.view); return; }
     if (key.name === "t") { key.preventDefault(); this.openPicker("team"); return; }
@@ -1252,11 +1408,12 @@ export class TuiApp {
       return;
     }
     this.footer.fg = C.muted;
-    this.footer.content = footerHint(
+    const hint = footerHint(
       this.listHidden,
       this.renderer.terminalWidth < 80,
       this.searchOverlay.visible,
       this.layout,
     );
+    this.footer.content = this.offline ? `${hint}  ·  offline` : hint;
   }
 }

@@ -24,7 +24,8 @@ export type TuiActionDispatch =
   | { type: "done" }
   | { type: "priority-menu" }
   | { type: "priority"; priority: number }
-  | { type: "comment" };
+  | { type: "comment" }
+  | { type: "select-issue"; identifier: string };
 
 export interface TuiActionItem {
   id: TuiActionId;
@@ -55,10 +56,23 @@ export function visibleSelectOffset(
   return Math.max(0, Math.min(selectedIndex - Math.floor(visibleCount / 2), optionCount - visibleCount));
 }
 
+export function exactIssueOptionIndex(options: readonly SelectOption[], query: string): number {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return -1;
+  return options.findIndex((option) => {
+    const value = option.value as TuiActionDispatch | undefined;
+    return value?.type === "select-issue" && value.identifier.toLowerCase() === needle;
+  });
+}
+
 export function filterNamedOptions(options: readonly SelectOption[], query: string): SelectOption[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [...options];
-  return options.filter((option) => option.name.toLowerCase().includes(needle));
+  const matches = options.filter((option) => option.name.toLowerCase().includes(needle));
+  const exact = exactIssueOptionIndex(matches, needle);
+  if (exact <= 0) return matches;
+  const selected = matches[exact]!;
+  return [selected, ...matches.slice(0, exact), ...matches.slice(exact + 1)];
 }
 
 export function firstTeamState(
@@ -94,6 +108,14 @@ export function tuiIssueActions(issue: TuiIssue, team: CachedTeam | undefined): 
 
 export function actionSelectOptions(items: readonly TuiActionItem[]): SelectOption[] {
   return items.map((item) => ({ name: item.name, description: "", value: item.dispatch }));
+}
+
+export function issueSelectOptions(issues: readonly TuiIssue[]): SelectOption[] {
+  return issues.map((issue) => ({
+    name: `${issue.identifier}  ${issue.title}`,
+    description: "",
+    value: { type: "select-issue", identifier: issue.identifier } satisfies TuiActionDispatch,
+  }));
 }
 
 export function prioritySelectOptions(): SelectOption[] {
@@ -152,11 +174,15 @@ export class TuiActionMenu {
     readonly issue: TuiIssue,
     private readonly options: {
       items: readonly TuiActionItem[];
+      issues?: readonly TuiIssue[];
       onCommit: (dispatch: TuiActionDispatch) => void;
       onClose: () => void;
     },
   ) {
-    this.actions = actionSelectOptions(options.items);
+    this.actions = [
+      ...actionSelectOptions(options.items),
+      ...issueSelectOptions(options.issues ?? []),
+    ];
     this.modal = new BoxRenderable(renderer, {
       id: "tui-actions", width: renderer.terminalWidth < 80 ? "88%" : "42%", height: "58%",
       padding: 1, gap: 1, flexDirection: "column", border: true, borderStyle: "single",
@@ -176,7 +202,8 @@ export class TuiActionMenu {
       onMouseScroll: (event) => event.preventDefault(),
     });
     this.input = new BrowserInput(renderer, {
-      id: "tui-actions-search", width: "100%", placeholder: "Search actions…",
+      id: "tui-actions-search", width: "100%",
+      placeholder: options.issues?.length ? "Search issues and actions…" : "Search actions…",
       backgroundColor: C.surface0, focusedBackgroundColor: C.surface1, textColor: C.text,
       focusedTextColor: C.text, placeholderColor: C.muted,
       onMouseDown: (event) => { this.input.focus(); event.preventDefault(); },
@@ -208,7 +235,11 @@ export class TuiActionMenu {
     });
     this.input.onEscapePressed = () => this.handleEscape();
     this.input.onDownPressed = () => this.list.focus();
-    this.input.on(InputRenderableEvents.INPUT, (value: string) => { this.list.options = this.filtered(value); });
+    this.input.on(InputRenderableEvents.INPUT, (value: string) => {
+      this.list.options = this.filtered(value);
+      const exact = exactIssueOptionIndex(this.list.options, value);
+      if (exact >= 0) this.list.setSelectedIndex(exact);
+    });
     this.input.on(InputRenderableEvents.ENTER, () => {
       if (this.list.options.length > 0) this.options.onCommit(this.list.getSelectedOption()?.value as TuiActionDispatch);
     });
@@ -240,7 +271,7 @@ export class TuiActionMenu {
       this.mode = "actions";
       this.modal.title = this.issue.identifier;
       this.input.value = "";
-      this.input.placeholder = "Search actions…";
+      this.input.placeholder = this.options.issues?.length ? "Search issues and actions…" : "Search actions…";
       this.list.options = this.actions;
       this.input.focus();
       return "backed";

@@ -11,7 +11,7 @@ import {
 } from "@opentui/core";
 import type { CachedState } from "../cache.ts";
 import type { TuiIssue, TuiWorkflowStateType } from "./data.ts";
-import { statusPresentation } from "./issue-list.ts";
+import { bindGenerationScrollRestore, statusPresentation } from "./issue-list.ts";
 import { GROK_NIGHT as C } from "./theme.ts";
 
 export interface KanbanState extends Omit<CachedState, "type"> {
@@ -103,6 +103,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
   private movingIdentifier: string | undefined;
   private hoveredIdentifier: string | undefined;
   private interactive = true;
+  private scrollRestoreGeneration = 0;
   private readonly cards = new Map<string, CardView>();
   private readonly columns = new Map<string, ColumnView>();
 
@@ -156,6 +157,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
   }
 
   setBoard(states: readonly CachedState[], issues: readonly TuiIssue[], selectedIdentifier?: string): void {
+    this.scrollRestoreGeneration += 1;
     this.clearDrag();
     const nextStates = kanbanStates(states, issues);
     const sameColumns = this.states.map((state) => state.id).join("\0") === nextStates.map((state) => state.id).join("\0");
@@ -186,6 +188,17 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
     return this.selectedIdentifier ? this.issueByIdentifier(this.selectedIdentifier) : undefined;
   }
 
+  selectIdentifier(identifier: string): boolean {
+    const issue = this.issueByIdentifier(identifier);
+    if (!issue) return false;
+    this.selectIssue(issue);
+    return true;
+  }
+
+  get isDragging(): boolean {
+    return this.draggedIdentifier !== undefined || this.pressedIdentifier !== undefined;
+  }
+
   captureScrollState(): KanbanScrollSnapshot {
     return {
       horizontal: this.scrollLeft,
@@ -194,13 +207,16 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
   }
 
   restoreScrollState(snapshot: KanbanScrollSnapshot): void {
+    const generation = ++this.scrollRestoreGeneration;
     this.scrollLeft = snapshot.horizontal;
     for (const [id, position] of Object.entries(snapshot.columns)) {
       const cards = this.columns.get(id)?.cards;
       if (!cards) continue;
       cards.scrollTop = position;
       if (cards.scrollTop !== position) {
-        cards.content.once("resize", () => { cards.scrollTop = position; });
+        bindGenerationScrollRestore(cards.content, generation, () => this.scrollRestoreGeneration, () => {
+          cards.scrollTop = position;
+        });
       }
     }
   }

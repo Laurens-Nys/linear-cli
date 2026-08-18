@@ -967,7 +967,7 @@ describe("TUI lazy detail, cancellation, and counts", () => {
       expect(app.footer.plainText).not.toContain("Could not refresh");
       expect(app.detailMarkdown.content).toContain("Users bounce.");
       move.resolve({ id: "st-done", name: "Done", color: "#9ece6a", type: "completed" });
-      await setup.waitFor(() => app.footer.plainText.includes("ENG-42 moved to Done"));
+      await setup.waitFor(() => app.footer.plainText.includes("Moved ENG-42 to Done"));
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 });
@@ -1470,7 +1470,7 @@ describe("mouse-first Kanban board", () => {
     const app = new TuiApp(
       setup.renderer,
       new TuiIssueStore(async (query) => { queries.push(query); return [issues[0]!]; }),
-      { ...appOptions(), initialTeamId: "team-eng", remote: true, moveNoticeDurationMs: 50,
+      { ...appOptions(), initialTeamId: "team-eng", remote: true, moveNoticeDurationMs: 50, undoDurationMs: 50,
         copyToClipboard: () => { copies += 1; return true; },
         moveIssue: (issueId, stateId) => { moves.push({ issueId, stateId }); return move.promise; } },
     );
@@ -1523,7 +1523,7 @@ describe("mouse-first Kanban board", () => {
       expect(app.search.focused).toBe(false);
 
       move.resolve({ id: "st-done", name: "Done", color: "#9ece6a", type: "completed" });
-      await setup.waitFor(() => app.footer.plainText.includes("ENG-42 moved to Done"));
+      await setup.waitFor(() => app.footer.plainText.includes("Moved ENG-42 to Done · u undo"));
       await Bun.sleep(60); await setup.flush();
       expect(app.footer.plainText).toContain("drag move");
     } finally { app.quit(); setup.renderer.destroy(); }

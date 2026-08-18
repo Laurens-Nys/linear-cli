@@ -36,6 +36,18 @@ export function statusPresentation(type: TuiWorkflowStateType): StatusPresentati
   return STATUS_PRESENTATION[type];
 }
 
+export function bindGenerationScrollRestore(
+  content: { once: (event: "resize", listener: () => void) => void },
+  generation: number,
+  currentGeneration: () => number,
+  restore: () => void,
+): void {
+  content.once("resize", () => {
+    if (currentGeneration() !== generation) return;
+    restore();
+  });
+}
+
 export interface StateGroup {
   name: string;
   type: TuiWorkflowStateType;
@@ -73,6 +85,7 @@ export const IssueListEvents = {
 export class IssueListRenderable extends ScrollBoxRenderable {
   private issues: TuiIssue[] = [];
   private selectedIndex = 0;
+  private scrollRestoreGeneration = 0;
   private readonly issueRows = new Map<number, BoxRenderable>();
 
   constructor(renderer: CliRenderer) {
@@ -97,7 +110,9 @@ export class IssueListRenderable extends ScrollBoxRenderable {
     }));
   }
 
-  setIssues(issues: readonly TuiIssue[], selectedIdentifier?: string): void {
+  setIssues(issues: readonly TuiIssue[], selectedIdentifier?: string, options?: { preserveScroll?: boolean }): void {
+    const generation = ++this.scrollRestoreGeneration;
+    const previousScroll = this.scrollTop;
     for (const child of [...this.getChildren()]) child.destroyRecursively();
     this.issueRows.clear();
     const groups = groupIssuesByState(issues);
@@ -118,9 +133,26 @@ export class IssueListRenderable extends ScrollBoxRenderable {
       for (const issue of group.issues) this.addIssueRow(issue, index++);
     }
 
-    this.scrollTo(0);
     this.updateSelectionFill();
+    if (options?.preserveScroll) {
+      this.scrollTop = previousScroll;
+      if (this.scrollTop !== previousScroll) {
+        bindGenerationScrollRestore(this.content, generation, () => this.scrollRestoreGeneration, () => {
+          this.scrollTop = previousScroll;
+        });
+      }
+      return;
+    }
+    this.scrollTo(0);
     queueMicrotask(() => this.scrollSelectedIntoView());
+  }
+
+  selectIdentifier(identifier: string): boolean {
+    const index = this.issues.findIndex((issue) => issue.identifier === identifier);
+    if (index < 0) return false;
+    if (index === this.selectedIndex) this.scrollSelectedIntoView();
+    else this.setSelectedIndex(index);
+    return true;
   }
 
   getSelectedIndex(): number {
