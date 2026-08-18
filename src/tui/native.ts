@@ -1,7 +1,7 @@
+import { dlopen } from "bun:ffi";
 import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setRenderLibPath } from "@opentui/core";
 
 const NATIVE_NAME = /(?:^|\/)(?:libopentui[^/]*\.(?:dylib|so)|opentui\.dll)$/i;
 
@@ -36,10 +36,23 @@ export async function materializeNativeLibrary(
   return dest;
 }
 
+/** Map the extracted library into the process, then unload it. Does not start a TUI. */
+export function loadNativeLibrary(path: string): void {
+  // bun:ffi refuses an empty symbol table. Bind one exported OpenTUI symbol and
+  // never call it — that would construct a renderer.
+  const lib = dlopen(path, {
+    createRenderer: { args: [], returns: "ptr" },
+  });
+  lib.close();
+}
+
 export async function prepareNativeRenderer(): Promise<void> {
   try {
     const dest = await materializeNativeLibrary();
-    if (dest) setRenderLibPath(dest);
+    if (dest) {
+      const { setRenderLibPath } = await import("@opentui/core");
+      setRenderLibPath(dest);
+    }
   } catch {
     // Keep OpenTUI's default path; createCliRenderer reports the real failure.
   }

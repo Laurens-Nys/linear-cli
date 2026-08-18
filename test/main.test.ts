@@ -227,6 +227,7 @@ describe("dispatch", () => {
       "customer list",
       "cycle list",
       "doc list",
+      "doctor",
       "inbox",
       "initiative list",
       "initiative posts",
@@ -393,7 +394,7 @@ describe("dispatch", () => {
 describe("help rendering comes from the registry", () => {
   test("the global help lists every registered command with its summary", () => {
     const help = renderGlobalHelp();
-    for (const name of ["api", "auth", "cache", "cache clear", "cache warm", "schema"]) {
+    for (const name of ["api", "auth", "cache", "cache clear", "cache warm", "doctor", "schema"]) {
       expect(help).toContain(name);
     }
     expect(help).toContain("--all-pages");

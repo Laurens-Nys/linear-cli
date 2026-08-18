@@ -8,6 +8,7 @@
 import "./api.ts";
 import "./auth.ts";
 import "./cache-cmd.ts";
+import "./doctor.ts";
 import "./schema.ts";
 import "./tui.ts";
 

@@ -90,6 +90,16 @@ export function isFresh(meta: Meta, now: number = Date.now()): boolean {
   return Number.isFinite(fetchedAt) && now - fetchedAt < TTL_MS;
 }
 
+/** Human age of a cache timestamp, e.g. `5m`, `3h`, `2d`. */
+export function cacheAge(fetchedAt: string, now: number = Date.now()): string {
+  const elapsed = now - Date.parse(fetchedAt);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "unknown";
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
 // --- reading ----------------------------------------------------------------
 
 function readMeta(path: string): Meta | null {

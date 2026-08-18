@@ -110,7 +110,7 @@ Global flags: `-n/--limit N` (default 50), `--after <cursor>`, `--all-pages` (fe
 
 ## Configuration, auth, cache
 
-- Auth: `LINEAR_API_KEY` env var only. Sent as `Authorization: <key>` (no `Bearer` prefix — that is how Linear personal keys work). Missing key: exit 3 with the exact env var name. The key is never printed, logged, or written to disk.
+- Auth: `LINEAR_API_KEY` env var only. Sent as `Authorization: <key>` (no `Bearer` prefix — that is how Linear personal keys work). Missing key: exit 3 naming Linear Settings > Security & access > Personal API keys and `export LINEAR_API_KEY` with no fake secret. Missing team: exit 2 naming `lin team list` plus `--team` / `.lin.toml` examples. The key is never printed, logged, or written to disk. `lin doctor` reprints these as a checks table.
 - Config file `.lin.toml`, discovered: cwd, then git root, then `$XDG_CONFIG_HOME/lin/config.toml` (default `~/.config/lin/config.toml`). Project file wins over global. Flat TOML only (`key = "value"` lines) parsed by a ~20-line internal parser; keys: `team`, `limit`. Unknown keys, malformed lines, and unreadable files fail with exit 2, naming the file, the offending line/key/value, and the correction. Env twins `LIN_TEAM`, `LIN_LIMIT` beat file; flags beat everything. Invalid `LIN_LIMIT` and `--limit` fail the same way (`needs a number, got "..."`). No API key in config files.
 - Cache: `$XDG_CACHE_HOME/lin/<workspace-urlKey>/meta.json` (default `~/.cache/lin/...`), 24h TTL. Holds the workspace's small vocabularies: teams (with states and labels), users, projects, workspace labels, templates. `lin cache warm` follows every vocabulary page (teams, users, projects, organization labels/templates, and each team's states/labels/templates). A missing or repeated cursor is exit 1 and does not write a partial cache; a complete walk writes once. Name resolution is exact (case-insensitive) against the cache; on miss, refresh once, then fail with candidates (exit 2). Commands that only need the vocabularies still succeed if the cache file cannot be written (sandboxes such as Infisical agent-proxy deny `~/.cache`). `lin cache` shows status, `lin cache warm` refreshes everything, `lin cache clear` deletes.
 - The workspace urlKey comes from `viewer { organization { urlKey } }`, cached with the rest.
@@ -199,7 +199,8 @@ Naming trap, verified against the schema: the GraphQL mutation `projectUpdate` e
 | `api [query]` | raw GraphQL. Query from arg or stdin. `--var k=v` (string), `--vars-json '{...}'`, `--paginate` (follows `pageInfo` on the single top-level connection), `--toon` re-encodes the response data as TOON | raw JSON `data` (or errors, exit 1) |
 | `schema [pattern]` | search the embedded SDL: prints matching type headers and field lines with 1 line of context; `--type <Name>` prints the full type block; `--full` dumps everything | SDL fragments |
 | `skill` | print an agent cheatsheet (SKILL.md shape) generated from the command registry at runtime — synopsis, flags, one example per command, the output contract, exit codes. `--install <dir>` writes `<dir>/SKILL.md` | markdown |
-| `auth` | viewer identity, workspace, plan, and rate-limit budget from the last response's `X-RateLimit-*` headers | record |
+| `auth` | viewer identity, workspace, and rate-limit budget from the last response's `X-RateLimit-*` headers, plus default team and cache age when present; never writes | record |
+| `doctor` | bounded setup checks: API key presence (never the value), Linear reachability and authenticated viewer+workspace, rate budget when headers exist, config validity/default team, cache presence/age/writability, compiled TUI native extraction and `dlopen` loadability, and Material Design Icons on the machine that renders the terminal; remote SSH/Herdr sessions warn to check the client Mac rather than treating a local font scan as truth; a malformed `.lin.toml` still prints every check; prints one `checks` table then exits 1 if a required check failed | rows `{check,status,detail,fix}` |
 | `cache` / `cache warm` / `cache clear` | inspect / refresh / delete the name cache | record / receipt |
 | `completions bash\|zsh\|fish` | static completion script generated from the registry | script |
 
@@ -229,8 +230,9 @@ src/
   config.ts      .lin.toml discovery + env + flag precedence
   cache.ts       meta cache read/write/TTL
   resolve.ts     exact name->id resolution for team/state/label/user/project/cycle/template/customer; issue identifier->UUID
+  doctor.ts      injectable setup checks for `lin doctor`
   out.ts         the four shapes + exit codes; the ONLY module that prints
-  commands/      one file per noun (issue.ts, issue-extra.ts, comment.ts, project.ts, milestone.ts, cycle.ts, initiative.ts, doc.ts, team.ts, user.ts, label.ts, template.ts, customer.ts, inbox.ts, aliases.ts, api.ts, schema.ts, skill.ts, auth.ts, cache-cmd.ts, completions.ts, tui.ts)
+  commands/      one file per noun (issue.ts, issue-extra.ts, comment.ts, project.ts, milestone.ts, cycle.ts, initiative.ts, doc.ts, team.ts, user.ts, label.ts, template.ts, customer.ts, inbox.ts, aliases.ts, api.ts, schema.ts, skill.ts, auth.ts, cache-cmd.ts, doctor.ts, completions.ts, tui.ts)
   tui/           OpenTUI browser: app, actions menu + comment composer, mouse-first board, issue list, markdown+mermaid detail, data, theme, native extract, desktop open, run
 schema.graphql   pinned Linear SDL, embedded into the compiled binary
 test/            bun test; harness stubs fetch; fixtures are SANITIZED synthetic shapes

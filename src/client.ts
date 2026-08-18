@@ -93,14 +93,14 @@ function captureRateInfo(headers: Headers): RateInfo {
 
 // --- auth -------------------------------------------------------------------
 
+/** Hint for a missing key: the Linear settings path and an export with no fake secret. */
+export const MISSING_API_KEY_HINT =
+  "create a personal API key in Linear Settings > Security & access > Personal API keys, then export LINEAR_API_KEY";
+
 export function apiKey(env: NodeJS.ProcessEnv = process.env): string {
   const key = env["LINEAR_API_KEY"];
   if (key === undefined || key.trim() === "") {
-    throw new LinError(
-      EXIT.auth,
-      "LINEAR_API_KEY is not set",
-      "create a personal API key at https://linear.app/settings/api and export LINEAR_API_KEY",
-    );
+    throw new LinError(EXIT.auth, "LINEAR_API_KEY is not set", MISSING_API_KEY_HINT);
   }
   return key.trim();
 }

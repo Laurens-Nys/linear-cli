@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import {
+  cacheAge,
   clear,
   isFresh,
   load,
@@ -50,6 +51,14 @@ describe("the 24 hour TTL", () => {
     } finally {
       box.cleanup();
     }
+  });
+
+  test("cacheAge names minutes, hours, then days", () => {
+    const now = Date.parse("2026-08-01T12:00:00.000Z");
+    expect(cacheAge("2026-08-01T11:50:00.000Z", now)).toBe("10m");
+    expect(cacheAge("2026-08-01T09:00:00.000Z", now)).toBe("3h");
+    expect(cacheAge("2026-07-20T12:00:00.000Z", now)).toBe("12d");
+    expect(cacheAge("not-a-date", now)).toBe("unknown");
   });
 });
 

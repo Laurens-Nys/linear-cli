@@ -41,10 +41,11 @@ When using `lin` remotely, install and configure the font on the client computer
 
 ## Quickstart
 
-Create a personal API key in Linear under Settings, Security and access, then:
+Create a personal API key in Linear Settings > Security & access > Personal API keys, then:
 
 ```sh
-export LINEAR_API_KEY=lin_api_...
+export LINEAR_API_KEY
+lin doctor               # setup checks: key, API, config, cache, TUI
 lin auth                 # who the key is, which workspace, how much rate budget is left
 lin ls                   # my open issues, most recently updated first
 lin ENG-42               # a bare identifier is always issue view
@@ -119,7 +120,7 @@ Full form is `lin <noun> <verb> [args] [flags]`. Top-level shortcuts cover the h
 | template | list, view |
 | customer | list, view, create, need add, need list |
 | inbox | read, archive |
-| meta | api, schema, auth, cache, skill, completions, tui |
+| meta | api, schema, auth, doctor, cache, skill, completions, tui |
 
 `lin --help` prints every command your binary has, grouped by noun. `lin issue --help` prints that noun's commands. `lin issue create -h` prints one command's arguments, flags and examples. `lin api` and `lin schema` reach the rest of Linear's API, the part no verb covers.
 
@@ -134,7 +135,7 @@ team = "ENG"
 limit = 50
 ```
 
-Unknown keys, malformed lines, and unreadable files fail with the file path and a correction. `LINEAR_API_KEY` is the only way to authenticate, and it is never printed, logged or written to disk. `LIN_TEAM` and `LIN_LIMIT` override the files; flags override everything. Invalid `LIN_LIMIT` and `--limit` fail with the same `needs a number` wording.
+Unknown keys, malformed lines, and unreadable files fail with the file path and a correction. `LINEAR_API_KEY` is the only way to authenticate, and it is never printed, logged or written to disk. A missing key names Linear Settings > Security & access > Personal API keys and `export LINEAR_API_KEY` with no fake secret. A missing team names `lin team list` plus `--team` and `.lin.toml` examples. `lin doctor` prints those checks as a table. `LIN_TEAM` and `LIN_LIMIT` override the files; flags override everything. Invalid `LIN_LIMIT` and `--limit` fail with the same `needs a number` wording.
 
 Name lookups for teams, states, labels, users, projects and templates resolve against a cache at `~/.cache/lin/<workspace>/meta.json` with a 24 hour life. `lin cache` shows its age, `lin cache warm` follows every vocabulary page then writes once, `lin cache clear` deletes it, and `--no-cache` skips it for one command.
 

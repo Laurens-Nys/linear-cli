@@ -38,7 +38,7 @@ Empty fields are dropped, dates are YYYY-MM-DD, priority is a word (urgent|high|
 \`--fields a,b\` selects columns only on table commands; bare \`--fields\` lists them. Non-table commands reject it.
 \`lin cache warm\` follows every vocabulary page, then writes once.
 Exit codes: 0 ok, 1 API or network, 2 correctable input (line two lists the valid values), 3 auth, 4 not found.
-Auth: \`export LINEAR_API_KEY=<personal key>\`, else exit 3. Config \`.lin.toml\`: \`team = "ENG"\`, \`limit = 50\`; \`LIN_TEAM\`/\`LIN_LIMIT\` beat the file, flags beat both.
+Auth: \`export LINEAR_API_KEY\`, else exit 3. Create the key in Linear Settings > Security & access > Personal API keys. Config \`.lin.toml\`: \`team = "ENG"\`, \`limit = 50\`; \`LIN_TEAM\`/\`LIN_LIMIT\` beat the file, flags beat both. \`lin doctor\` prints a setup checks table.
 Shorthand: \`lin ENG-42\` is \`lin issue view ENG-42\`; an issue URL or UUID works anywhere an identifier does.
 `;
 

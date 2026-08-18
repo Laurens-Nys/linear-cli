@@ -72,13 +72,13 @@ async function lookup<T>(
 
 // --- team -------------------------------------------------------------------
 
+/** Hint for a missing default team: list teams, then flag or config. */
+export const MISSING_TEAM_HINT =
+  'run lin team list, then pass --team ENG or add team = "ENG" to .lin.toml';
+
 export async function resolveTeam(ref: string | undefined, options: ResolveOptions = {}): Promise<CachedTeam> {
   if (ref === undefined || ref === "") {
-    throw new LinError(
-      EXIT.input,
-      "no team given",
-      'pass --team KEY, or set team = "KEY" in .lin.toml',
-    );
+    throw new LinError(EXIT.input, "no team given", MISSING_TEAM_HINT);
   }
 
   return lookup<CachedTeam>(

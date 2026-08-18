@@ -72,7 +72,9 @@ describe("teams", () => {
       const error = await expectLinError(() => resolveTeam(undefined, { env }));
       expect(error.exitCode).toBe(EXIT.input);
       expect(error.message).toBe("no team given");
-      expect(error.hint).toContain("--team");
+      expect(error.hint).toContain("lin team list");
+      expect(error.hint).toContain("--team ENG");
+      expect(error.hint).toContain('team = "ENG"');
       expect(error.hint).toContain(".lin.toml");
     }),
   );

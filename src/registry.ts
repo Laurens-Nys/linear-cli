@@ -56,6 +56,12 @@ export interface CommandSpec {
   fields?: readonly string[];
   /** Extra keys `--fields` may select beyond `fields`. */
   extra?: readonly string[];
+  /**
+   * Skip pre-dispatch `resolveConfig`. The command receives a harmless default
+   * Config and must load/validate config itself. Used by `lin doctor` so a
+   * malformed `.lin.toml` still prints every check.
+   */
+  selfConfig?: boolean;
   /** At least one, copy-pasteable, starting with "lin ". */
   examples: string[];
   run: (ctx: RunContext) => Promise<void> | void;

@@ -3,7 +3,7 @@
 
 import pkg from "../package.json" with { type: "json" };
 import "./commands/index.ts";
-import { parseLimitInput, resolveConfig } from "./config.ts";
+import { DEFAULT_LIMIT, parseLimitInput, resolveConfig } from "./config.ts";
 import { EXIT, LinError, failFrom, line, resetFields, selectColumns, setFields, setQuiet, type ExitCode } from "./out.ts";
 import {
   allCommands,
@@ -355,7 +355,10 @@ export async function run(argv: readonly string[]): Promise<ExitCode> {
 
     const team = typeof flags["team"] === "string" ? flags["team"] : undefined;
     const limit = typeof flags["limit"] === "number" ? flags["limit"] : undefined;
-    const config = resolveConfig({ team, limit });
+    // `selfConfig` commands diagnose a broken file; they must not die here.
+    const config = found.command.selfConfig
+      ? { limit: DEFAULT_LIMIT }
+      : resolveConfig({ team, limit });
 
     await found.command.run({ args, flags, config, command: found.command });
     return EXIT.ok;

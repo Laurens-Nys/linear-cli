@@ -23,6 +23,10 @@ describe("auth", () => {
       const error = await expectLinError(() => client.gql(QUERY, undefined, { env: {} }));
       expect(error.exitCode).toBe(EXIT.auth);
       expect(error.message).toContain("LINEAR_API_KEY");
+      expect(error.hint).toContain("Linear Settings > Security & access > Personal API keys");
+      expect(error.hint).toContain("export LINEAR_API_KEY");
+      expect(error.hint).not.toContain("lin_api");
+      expect(error.hint).not.toMatch(/=/);
       expect(stub.calls).toHaveLength(0); // fails before any request
     } finally {
       stub.restore();
