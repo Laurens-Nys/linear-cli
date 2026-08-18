@@ -109,8 +109,8 @@ describe("TUI issue data", () => {
     expect(page.totalCount).toBe(2);
     expect(page.pageInfo).toEqual({ hasNextPage: false, endCursor: null });
     expect(net.calls[0]?.document).toContain("state { id name color type }");
-    expect(net.calls[0]?.document).toContain("totalCount");
     expect(net.calls[0]?.document).toContain("pageInfo { hasNextPage endCursor }");
+    expect(net.calls[0]?.document).not.toContain("totalCount");
     expect(net.calls[0]?.document).not.toContain("description");
     expect(net.calls[0]?.document).not.toContain("comments");
     expect(net.calls[0]?.variables).toEqual({
@@ -200,7 +200,8 @@ describe("TUI issue data", () => {
 
   test("the list query is slim and the detail query is named and lazy", () => {
     expect(TUI_ISSUES_DOCUMENT).toContain("query LinTuiIssues");
-    expect(TUI_ISSUES_DOCUMENT).toContain("totalCount");
+    expect(TUI_ISSUES_DOCUMENT).toContain("pageInfo { hasNextPage endCursor }");
+    expect(TUI_ISSUES_DOCUMENT).not.toContain("totalCount");
     expect(TUI_ISSUES_DOCUMENT).not.toMatch(/description/);
     expect(TUI_ISSUES_DOCUMENT).not.toMatch(/comments/);
     expect(TUI_ISSUE_DETAIL_DOCUMENT).toContain("query LinTuiIssueDetail");

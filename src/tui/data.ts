@@ -60,7 +60,7 @@ export interface TuiIssuePage {
 interface TuiIssuesResponse {
   issues: {
     nodes: TuiIssue[];
-    totalCount: number;
+    totalCount?: number;
     pageInfo: { hasNextPage?: boolean; endCursor?: string | null };
   };
 }
@@ -126,7 +126,6 @@ export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: Is
       project { name }
       labels { nodes { name } }
     }
-    totalCount
     pageInfo { hasNextPage endCursor }
   }
 }`;
