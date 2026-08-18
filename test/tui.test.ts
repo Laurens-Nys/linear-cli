@@ -262,7 +262,7 @@ describe("TUI issue data", () => {
     expect(store.peekDetail(issues[1]!)?.description).toBe("second");
   });
 
-  test("peekCachedDetail survives updatedAt changes until invalidateDetail", async () => {
+  test("markDetailStale preserves the old body while forcing a refresh", async () => {
     let fetches = 0;
     const store = new TuiIssueStore(async () => issues, async (id) => {
       fetches += 1;
@@ -272,8 +272,9 @@ describe("TUI issue data", () => {
     const later = { ...issues[0]!, updatedAt: "2026-09-01T00:00:00Z" };
     expect(store.peekDetail(later)).toBeUndefined();
     expect(store.peekCachedDetail(later)?.description).toBe("body-1");
-    store.invalidateDetail(issues[0]!.id);
-    expect(store.peekCachedDetail(later)).toBeUndefined();
+    store.markDetailStale(issues[0]!.id);
+    expect(store.peekDetail(issues[0]!)).toBeUndefined();
+    expect(store.peekCachedDetail(later)?.description).toBe("body-1");
     await store.loadDetail(later);
     expect(fetches).toBe(2);
     expect(store.peekDetail(later)?.description).toBe("body-2");

@@ -239,12 +239,18 @@ describe("TUI undo", () => {
     } finally { setup.renderer.destroy(); }
   });
 
-  test("priority and comment do not arm undo", async () => {
+  test("priority and comment discard an older state undo and never arm one", async () => {
+    const moves: string[] = [];
     const setup = await createTestRenderer({ width: 110, height: 30 });
     const app = currentApp = new TuiApp(
       setup.renderer,
       new TuiIssueStore(async () => [issues[0]!], async (id) => detailLoader(id)),
       appOptions({
+        moveIssue: async (_issueId, stateId) => {
+          moves.push(stateId);
+          const state = meta.teams[0]!.states.find((item) => item.id === stateId)!;
+          return { id: state.id, name: state.name, color: state.color ?? "", type: state.type as TuiIssue["state"]["type"] };
+        },
         updatePriority: async (_issueId, priority) => priority,
         createComment: async () => ({ id: "c-new" }),
       }),
@@ -252,18 +258,27 @@ describe("TUI undo", () => {
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
       setup.mockInput.pressKey("a"); await setup.flush();
+      await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
+      await setup.waitFor(() => app.footer.plainText.includes("u undo"));
+
+      setup.mockInput.pressKey("a"); await setup.flush();
       await setup.mockInput.typeText("priority"); setup.mockInput.pressEnter(); await setup.flush();
-      await setup.mockInput.typeText("high"); setup.mockInput.pressEnter();
-      await setup.waitFor(() => app.footer.plainText.includes("set to High") || app.list.getSelectedIssue()?.priority === 2);
+      await setup.mockInput.typeText("urgent"); setup.mockInput.pressEnter();
+      await setup.waitFor(() => app.list.getSelectedIssue()?.priority === 1);
       expect(app.footer.plainText).not.toContain("u undo");
       setup.mockInput.pressKey("u"); await setup.flush();
-      expect(app.list.getSelectedIssue()?.priority).toBe(2);
+      expect(moves).toEqual(["st-doing"]);
 
+      setup.mockInput.pressKey("a"); await setup.flush();
+      await setup.mockInput.typeText("done"); setup.mockInput.pressEnter();
+      await setup.waitFor(() => app.footer.plainText.includes("u undo"));
       setup.mockInput.pressKey("a"); await setup.flush();
       await setup.mockInput.typeText("comment"); setup.mockInput.pressEnter(); await setup.flush();
       await setup.mockInput.typeText("Looks good."); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Commented on ENG-42"));
       expect(app.footer.plainText).not.toContain("u undo");
+      setup.mockInput.pressKey("u"); await setup.flush();
+      expect(moves).toEqual(["st-doing", "st-done"]);
     } finally { setup.renderer.destroy(); }
   });
 

@@ -26,7 +26,7 @@ description: Manage Linear from the shell with the lin CLI - read, create, updat
 
 # lin - Linear for coding agents
 
-Output is TOON: YAML-adjacent, tabular, never JSON. Four shapes:
+Curated commands output TOON: YAML-adjacent and tabular. Raw \`lin api\` outputs JSON unless \`--toon\` is passed. Four curated shapes:
 
 - list: \`issues[2]{id,title,state}:\` then one indented comma row per item; a trailing \`# 11 more · <exact next-page command>\` means the page was cut.
 - record: \`key: value\` lines, the markdown body between \`---\` fences, then sub-tables like \`comments[2]{ref,author,date,body}:\`.

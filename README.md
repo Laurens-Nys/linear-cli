@@ -166,7 +166,7 @@ bun run build       # dist/lin
 bun run check:budgets  # binary size + startup smoke
 ```
 
-Live Linear smoke is a manual workflow (`live-smoke`) and needs repository secret `LINEAR_API_KEY`. It is read-only and discards Linear command stdout so workspace data never reaches public logs. Manual release dry-runs are `contents: read` only. Tag publication needs the protected `release` environment and `LIN_RELEASE_PUBLISH=true` after separate approval. Homebrew cask upload stays `skip_upload: true` until a separate tap approval. Details: DEVELOPMENT.md.
+Live Linear smoke is a manual workflow (`live-smoke`) and needs repository secret `LINEAR_API_KEY`. It is read-only and discards Linear command stdout and stderr so workspace data never reaches public logs. Manual release dry-runs are `contents: read` only. Tag publication needs the protected `release` environment and `LIN_RELEASE_PUBLISH=true` after separate approval. Homebrew cask upload stays `skip_upload: true` until a separate tap approval. Details: DEVELOPMENT.md.
 
 ## License
 

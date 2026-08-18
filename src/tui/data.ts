@@ -373,7 +373,12 @@ export class TuiIssueStore {
     }
   }
 
-  /** Public seam for local writes (comment composer) that make a cached detail stale. */
+  /** Keep the last body visible but force the next detail request to refresh it. */
+  markDetailStale(issueId: string): void {
+    const cached = this.details.get(issueId);
+    if (cached) cached.updatedAt = "";
+  }
+
   invalidateDetail(issueId: string): void {
     this.details.delete(issueId);
   }

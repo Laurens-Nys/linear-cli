@@ -97,7 +97,7 @@ Full form: `lin <noun> <verb> [args] [flags]`. Top-level aliases for the hot pat
 |---|---|
 | `lin ENG-42` | bare identifier is always `issue view` |
 | `lin ls` | my open issues (assignee = me, state type not completed/canceled), most recently updated first |
-| `lin today` | assigned open issues that are started, overdue, urgent/high, or blocked. Workspace-wide unless `--team` or config team is set. Reasons are the matching facts, comma-separated in that order (`started,overdue,urgent/high,blocked`). Sort: started, then overdue, urgent, high, blocked; ties break by priority (urgent→none), earlier due (missing last), newer updated, then id. Fetches every matching assigned open page, then applies `-n`; `--after` is rejected. A cut table continues with `# N more · lin today -n <total>` | rows `{id,title,state,priority,due,reason,updated}` |
+| `lin today` | assigned open issues that are started, overdue, urgent/high, or blocked; rows are `{id,title,state,priority,due,reason,updated}`. Workspace-wide unless `--team` or config team is set. Reasons are the matching facts, comma-separated in that order (`started,overdue,urgent/high,blocked`). Sort: started, then overdue, urgent, high, blocked; ties break by priority (urgent→none), earlier due (missing last), newer updated, then id. Fetches every matching assigned open page, then applies `-n`; `--after` is rejected. A cut table continues with `# N more · lin today -n <total>` |
 | `lin start [id]` | assign me + move to the team's first `started`-type state + print the suggested branch name |
 | `lin done [id]` | move to the team's first `completed`-type state; id inferred from the current git branch when omitted |
 | `lin triage [--team X]` | issues in the team's triage state, oldest first |

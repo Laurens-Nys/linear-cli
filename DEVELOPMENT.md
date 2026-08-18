@@ -33,7 +33,7 @@ lin ls -n 5
 lin today -n 5
 ```
 
-Each Linear command's stdout is redirected to `/dev/null`. The step prints only those static labels and the command's exit status still fails the job. It fails clearly when repository secret `LINEAR_API_KEY` is absent. The key stays in the environment and is never printed. Workspace email, teams, issues, customers, and cache paths must not appear in the log. The workflow never runs mutations (`start`, `done`, `issue update`, `comment add`, and the rest).
+Each Linear command's stdout and stderr are redirected to `/dev/null`. The step prints only those static labels and the command's exit status still fails the job. It fails clearly when repository secret `LINEAR_API_KEY` is absent. The key stays in the environment and is never printed. Workspace email, teams, issues, customers, and cache paths must not appear in the log. The workflow never runs mutations (`start`, `done`, `issue update`, `comment add`, and the rest).
 
 ## Release safety
 

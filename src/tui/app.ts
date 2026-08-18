@@ -1126,6 +1126,7 @@ export class TuiApp {
 
   private async setPriority(issue: TuiIssue, priority: number): Promise<void> {
     if (this.pendingMove) return;
+    this.discardUndo();
     const current = this.store.state.issues.find((item) => item.id === issue.id);
     if (!current) return;
     this.pendingMove = true;
@@ -1199,6 +1200,7 @@ export class TuiApp {
     }
     const issue = this.store.state.issues.find((item) => item.id === composer.issue.id) ?? composer.issue;
     composer.setSaving();
+    this.discardUndo();
     this.pendingMove = true;
     this.errorMessage = "";
     this.notice = "";
@@ -1206,7 +1208,7 @@ export class TuiApp {
     try {
       await (this.options.createComment ?? createTuiComment)(issue.id, body);
       if (this.stopped || this.renderer.isDestroyed) return;
-      this.store.invalidateDetail(issue.id);
+      this.store.markDetailStale(issue.id);
       const restore = this.comment?.previousFocus ?? this.lastContentFocus;
       this.comment = undefined;
       composer.destroy();

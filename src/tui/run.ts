@@ -30,6 +30,7 @@ function findTeam(meta: Meta, ref: string | undefined): Meta["teams"][number] | 
 
 export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}): Promise<void> {
   let renderer: CliRenderer | undefined;
+  let app: TuiApp | undefined;
   let finish = (): void => {};
   const stopped = new Promise<void>((resolve) => { finish = resolve; });
 
@@ -56,7 +57,10 @@ export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}):
         );
       }
     }
-    renderer.once(CliRenderEvents.DESTROY, finish);
+    renderer.once(CliRenderEvents.DESTROY, () => {
+      app?.quit();
+      finish();
+    });
     if (renderer.isDestroyed) return;
     const pendingKeyHandler = (key: import("@opentui/core").KeyEvent): void => {
       if ((key.ctrl && key.name === "c") || key.name === "q") {
@@ -93,7 +97,7 @@ export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}):
     renderer.keyInput.off("keypress", pendingKeyHandler);
     const issueLoader = options.loadIssues ?? loadTuiIssues;
     const store = new TuiIssueStore(issueLoader, options.loadIssueDetail ?? loadTuiIssueDetail);
-    const app = new TuiApp(renderer, store, {
+    app = new TuiApp(renderer, store, {
       limit: config.limit, meta, initialTeamId: initialTeam?.id, onQuit: finish,
     });
     app.start();
