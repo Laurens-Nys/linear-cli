@@ -15,15 +15,18 @@ issues[3]{id,title,state,priority,updated}:
 
 ## Install
 
-Binaries and a Homebrew tap land with the first tagged release. Until then, build from source with [Bun](https://bun.sh):
+Build from source with [Bun](https://bun.sh) 1.3.14:
 
 ```sh
 git clone https://github.com/Laurens-Nys/linear-cli
 cd linear-cli
-bun install
+bun install --frozen-lockfile
 bun run build
 cp dist/lin ~/.local/bin/lin
+lin doctor
 ```
+
+Homebrew (`brew tap Laurens-Nys/tap && brew install lin`) ships only after a separately approved tagged release. Until then the tap is not published; see DEVELOPMENT.md for the release gate, tap token, and notarization notes.
 
 The noninteractive CLI has no runtime dependencies. The TUI's matched status icons require [Material Design Icons](https://pictogrammers.com/library/mdi/) on every computer that renders the terminal. On macOS:
 
@@ -136,7 +139,7 @@ team = "ENG"
 limit = 50
 ```
 
-Unknown keys, malformed lines, and unreadable files fail with the file path and a correction. `LINEAR_API_KEY` is the only way to authenticate, and it is never printed, logged or written to disk. A missing key names Linear Settings > Security & access > Personal API keys and `export LINEAR_API_KEY` with no fake secret. A missing team names `lin team list` plus `--team` and `.lin.toml` examples. `lin doctor` prints those checks as a table. `LIN_TEAM` and `LIN_LIMIT` override the files; flags override everything. Invalid `LIN_LIMIT` and `--limit` fail with the same `needs a number` wording.
+Unknown keys, malformed lines, and unreadable files fail with the file path and a correction. `LINEAR_API_KEY` is the only way to authenticate, and it is never printed, logged or written to disk. A missing key names Linear Settings > Security & access > Personal API keys and `export LINEAR_API_KEY` with no fake secret. A missing team names `lin team list` plus `--team` and `.lin.toml` examples. `lin doctor` prints those checks as a table. `LIN_TEAM` and `LIN_LIMIT` override the files; flags override everything. `limit` / `LIN_LIMIT` / `--limit` must be an integer from 1 to 250 and fail with the same wording before any request.
 
 Name lookups for teams, states, labels, users, projects and templates resolve against a cache at `~/.cache/lin/<workspace>/meta.json` with a 24 hour life. `lin cache` shows its age, `lin cache warm` follows every vocabulary page then writes once, `lin cache clear` deletes it, and `--no-cache` skips it for one command.
 
@@ -146,7 +149,7 @@ Name lookups for teams, states, labels, users, projects and templates resolve ag
 lin skill --install .claude/skills/linear
 ```
 
-That writes a `SKILL.md` cheatsheet: the output contract, the exit codes, and every command with its synopsis and one worked example. Completions come from the same place:
+That writes a `SKILL.md` cheatsheet: the output contract, first-class workflows and recovery, then every command with its synopsis and one worked example. Completions come from the same place:
 
 ```sh
 lin completions zsh > ~/.zfunc/_lin
@@ -157,10 +160,13 @@ Help, `skill` and `completions` all render from one command registry at runtime,
 ## Development
 
 ```sh
-bun test          # unit tests, no network
-bunx tsc --noEmit # types
-bun run build     # dist/lin
+bun test            # unit tests, no network
+bunx tsc --noEmit   # types
+bun run build       # dist/lin
+bun run check:budgets  # binary size + startup smoke
 ```
+
+Live Linear smoke is a manual workflow (`live-smoke`) and needs repository secret `LINEAR_API_KEY`. It is read-only and discards Linear command stdout so workspace data never reaches public logs. Manual release dry-runs are `contents: read` only. Tag publication needs the protected `release` environment and `LIN_RELEASE_PUBLISH=true` after separate approval. Homebrew cask upload stays `skip_upload: true` until a separate tap approval. Details: DEVELOPMENT.md.
 
 ## License
 

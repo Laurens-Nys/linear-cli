@@ -38,9 +38,34 @@ Empty fields are dropped, dates are YYYY-MM-DD, priority is a word (urgent|high|
 \`--fields a,b\` selects columns only on table commands; bare \`--fields\` lists them. Non-table commands reject it.
 \`lin cache warm\` follows every vocabulary page, then writes once.
 Exit codes: 0 ok, 1 API or network, 2 correctable input (line two lists the valid values), 3 auth, 4 not found.
-Auth: \`export LINEAR_API_KEY\`, else exit 3. Create the key in Linear Settings > Security & access > Personal API keys. Config \`.lin.toml\`: \`team = "ENG"\`, \`limit = 50\`; \`LIN_TEAM\`/\`LIN_LIMIT\` beat the file, flags beat both. \`lin doctor\` prints a setup checks table.
+Auth: \`export LINEAR_API_KEY\`, else exit 3. Create the key in Linear Settings > Security & access > Personal API keys. Config \`.lin.toml\`: \`team = "ENG"\`, \`limit = 50\` (integer 1-250); \`LIN_TEAM\`/\`LIN_LIMIT\` beat the file, flags beat both. \`lin doctor\` prints a setup checks table.
 Shorthand: \`lin ENG-42\` is \`lin issue view ENG-42\`; \`lin today\` is assigned issues that are started, overdue, urgent/high, or blocked. An issue URL or UUID works anywhere an identifier does.
 `;
+
+/** First-class recipes. Kept above the generated inventory so agents see them first. */
+export const WORKFLOWS = `## Workflows
+
+Inspect / take / start:
+\`lin today\` then \`lin ls\` then \`lin ENG-42\`. \`lin start ENG-42\` assigns me, moves to the team's first started state, and prints the branch; omit the id to use the current git branch.
+
+Batch update:
+\`lin issue update ENG-42 ENG-41 --state Done\` (max 50 ids). Split larger sets.
+
+Comment from file or stdin:
+\`lin comment add ENG-42 -m @notes.md\` or \`-m -\`. Create/update \`-d\` accepts the same \`text|@file|-\`.
+
+Safe pages and fields:
+Honor \`# N more · <exact command>\`. \`--all-pages\` only on \`issue list\`, \`ls\`, \`triage\`, \`comment\`, \`search\`; others reject it. inbox \`--all\` is include-read/bulk, never pagination. \`--fields a,b\` on tables; bare \`--fields\` lists them (exit 2). \`-n\` is an integer 1-250.
+
+Ambiguous names:
+Exit 2 lists \`matches:\`. Never guess. Qualify labels as \`group/label\`. Then \`lin cache warm\` and retry.
+
+Recover:
+Exit 3: create a key in Linear Settings > Security & access > Personal API keys, \`export LINEAR_API_KEY\` (never print it). Exit 2: use the second stderr line. Timeout/network: retry. Rate limited: wait for the printed reset. Setup: \`lin doctor\`. Stale vocab: \`lin cache warm\`.
+`;
+
+/** Soft ceiling so the generated cheatsheet stays token-conscious. */
+export const SKILL_MAX_BYTES = 16_384;
 
 function argToken(arg: ArgSpec): string {
   const name = arg.variadic ? `${arg.name}...` : arg.name;
@@ -92,7 +117,7 @@ function byGroup(commands: readonly CommandSpec[]): Map<string, CommandSpec[]> {
  * summary, then one worked example — because an agent pays for every line.
  */
 export function renderSkill(commands: readonly CommandSpec[]): string {
-  const out: string[] = [HEADER];
+  const out: string[] = [HEADER, WORKFLOWS];
 
   out.push("| global flag | meaning |", "|---|---|");
   for (const [name, spec] of Object.entries(GLOBAL_FLAGS)) {

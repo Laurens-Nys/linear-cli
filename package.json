@@ -8,7 +8,10 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
-    "build": "bun build --compile ./src/main.ts --outfile dist/lin"
+    "build": "bun build --compile ./src/main.ts --outfile dist/lin",
+    "check:size": "bun scripts/check-binary-size.ts",
+    "check:startup": "bun scripts/check-startup.ts",
+    "check:budgets": "bun scripts/check-binary-size.ts && bun scripts/check-startup.ts"
   },
   "dependencies": {
     "@opentui/core": "0.5.1",

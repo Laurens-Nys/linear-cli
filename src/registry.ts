@@ -71,7 +71,7 @@ export interface CommandSpec {
 
 /** Available on every command; commands may not redeclare these names. */
 export const GLOBAL_FLAGS: Record<string, FlagSpec> = {
-  limit: { type: "number", short: "n", valueHint: "N", doc: "maximum rows to return (default 50)" },
+  limit: { type: "number", short: "n", valueHint: "N", doc: "maximum rows to return, 1-250 (default 50)" },
   after: { type: "string", valueHint: "cursor", doc: "start from a pagination cursor" },
   "all-pages": {
     type: "boolean",

@@ -3,13 +3,28 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Dry-run only. Never publishes a GitHub release or Homebrew tap.
+        type: choice
+        options:
+          - check
+          - snapshot
+        default: snapshot
 
+# Default is read-only. Only the tag publish job may request contents: write.
+# workflow_dispatch has no path to publish. Tag pushes stay blocked until
+# repository variable LIN_RELEASE_PUBLISH is "true" after separate approval.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  goreleaser:
+  dry-run:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -24,10 +39,68 @@ jobs:
       # shells out to whatever `bun` is on PATH.
       - run: bun install --frozen-lockfile --os="*" --cpu="*"
 
-      - uses: goreleaser/goreleaser-action@v7
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "~> v2.10"
+          args: check
+
+      - name: Snapshot package (no publish)
+        if: inputs.mode == 'snapshot'
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2.10"
+          args: release --snapshot --skip=publish --clean
+
+      - name: Validate snapshot artifacts
+        if: inputs.mode == 'snapshot'
+        run: bun scripts/check-snapshot-artifacts.ts
+
+  guard:
+    if: github.event_name == 'push' && vars.LIN_RELEASE_PUBLISH != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Release publish is blocked
+        run: |
+          echo "Release publish is blocked."
+          echo "Tag pushes do not publish a GitHub release or Homebrew tap until repository variable LIN_RELEASE_PUBLISH=true is set after separate approval."
+          echo "Use workflow_dispatch (check or snapshot) for a dry-run. Do not add tap tokens here."
+          exit 1
+
+  publish:
+    if: github.event_name == 'push' && vars.LIN_RELEASE_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # GoReleaser reads the tag history to build the changelog.
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile --os="*" --cpu="*"
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2.10"
+          args: check
+
+      - name: Publish release
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2.10"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

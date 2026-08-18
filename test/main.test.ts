@@ -35,7 +35,11 @@ describe("flag parsing", () => {
   test("number flags are parsed, and a non-number is exit 2", () => {
     expect(parseArgs(["--estimate", "3"], SPECS).flags["estimate"]).toBe(3);
     expect(() => parseArgs(["--estimate", "big"], SPECS)).toThrow(/needs a number/);
-    expect(() => parseArgs(["--limit", "many"], SPECS)).toThrow(/--limit needs a number, got "many"/);
+    expect(() => parseArgs(["--limit", "many"], SPECS)).toThrow(/--limit must be an integer from 1 to 250, got "many"/);
+    expect(() => parseArgs(["--limit", "0"], SPECS)).toThrow(/got "0"/);
+    expect(() => parseArgs(["--limit", "251"], SPECS)).toThrow(/got "251"/);
+    expect(() => parseArgs(["--limit", "2.5"], SPECS)).toThrow(/got "2.5"/);
+    expect(parseArgs(["--limit", "250"], SPECS).flags["limit"]).toBe(250);
   });
 
   test("an unknown flag is exit 2 and lists the valid ones", () => {
@@ -359,6 +363,38 @@ describe("dispatch", () => {
       captured.restore();
       stub.restore();
       box.cleanup();
+    }
+  });
+
+  test("out-of-range --limit and LIN_LIMIT fail before the network", async () => {
+    const box = sandbox();
+    const stub = mock([]);
+    try {
+      await expect(run(["ls", "--limit", "0"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: '--limit must be an integer from 1 to 250, got "0"',
+      });
+      await expect(run(["today", "-n", "251"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: '--limit must be an integer from 1 to 250, got "251"',
+      });
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+
+    const envBox = sandbox({ LIN_LIMIT: "-1" });
+    const envStub = mock([]);
+    try {
+      await expect(run(["ls"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: 'LIN_LIMIT must be an integer from 1 to 250, got "-1"',
+      });
+      expect(envStub.calls).toHaveLength(0);
+    } finally {
+      envStub.restore();
+      envBox.cleanup();
     }
   });
 

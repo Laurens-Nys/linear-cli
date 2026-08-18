@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_LIMIT, findGitRoot, loadConfigFiles, parseLimitInput, parseToml, resolveConfig } from "../src/config.ts";
+import { DEFAULT_LIMIT, findGitRoot, loadConfigFiles, MAX_LIMIT, parseLimit, parseLimitInput, parseToml, resolveConfig } from "../src/config.ts";
 import { EXIT, LinError } from "../src/out.ts";
 import { sandbox } from "./harness.ts";
 
@@ -64,13 +64,17 @@ describe("the flat TOML parser", () => {
   test("throws when limit is not a number", () => {
     const error = expectLinError(() => parseToml("limit = true", "/tmp/.lin.toml"));
     expect(error.message).toContain("/tmp/.lin.toml:1");
-    expect(error.message).toContain("limit needs a number, got true");
+    expect(error.message).toContain('limit must be an integer from 1 to 250, got "true"');
     expect(error.hint).toContain("--limit 20");
   });
 
-  test("handles negative and fractional numbers", () => {
-    expect(parseToml("limit = -3")).toEqual({ limit: -3 });
-    expect(parseToml("limit = 2.5")).toEqual({ limit: 2.5 });
+  test("rejects zero, negative, fractional, and over-max limits", () => {
+    expect(expectLinError(() => parseToml("limit = 0")).message).toContain("got \"0\"");
+    expect(expectLinError(() => parseToml("limit = -3")).message).toContain("got \"-3\"");
+    expect(expectLinError(() => parseToml("limit = 2.5")).message).toContain("got \"2.5\"");
+    expect(expectLinError(() => parseToml(`limit = ${MAX_LIMIT + 1}`)).message).toContain(`got "${MAX_LIMIT + 1}"`);
+    expect(parseToml("limit = 1")).toEqual({ limit: 1 });
+    expect(parseToml(`limit = ${MAX_LIMIT}`)).toEqual({ limit: MAX_LIMIT });
   });
 });
 
@@ -171,16 +175,35 @@ describe("precedence: flag > env > project > global", () => {
     }
   });
 
+  test("a file limit outside 1-250 fails with the shared wording before any request", () => {
+    const box = sandbox();
+    try {
+      writeFileSync(join(box.dir, ".lin.toml"), "limit = 0\n");
+      const error = expectLinError(() => resolveConfig({}, box.dir, box.env));
+      expect(error.exitCode).toBe(EXIT.input);
+      expect(error.message).toContain(join(box.dir, ".lin.toml"));
+      expect(error.message).toContain('limit must be an integer from 1 to 250, got "0"');
+    } finally {
+      box.cleanup();
+    }
+  });
+
   test("an unparseable LIN_LIMIT is fatal with the same wording as --limit", () => {
     const box = sandbox();
     try {
       const error = expectLinError(() => resolveConfig({}, box.dir, { ...box.env, LIN_LIMIT: "many" }));
       expect(error.exitCode).toBe(EXIT.input);
-      expect(error.message).toBe('LIN_LIMIT needs a number, got "many"');
+      expect(error.message).toBe('LIN_LIMIT must be an integer from 1 to 250, got "many"');
       expect(error.hint).toBe("example: --limit 20");
       const flagError = expectLinError(() => parseLimitInput("many", "--limit"));
-      expect(flagError.message).toBe('--limit needs a number, got "many"');
+      expect(flagError.message).toBe('--limit must be an integer from 1 to 250, got "many"');
       expect(flagError.hint).toBe(error.hint);
+      expect(expectLinError(() => resolveConfig({}, box.dir, { ...box.env, LIN_LIMIT: "0" })).message).toBe(
+        'LIN_LIMIT must be an integer from 1 to 250, got "0"',
+      );
+      expect(expectLinError(() => parseLimit(251, "--limit")).message).toBe(
+        '--limit must be an integer from 1 to 250, got "251"',
+      );
     } finally {
       box.cleanup();
     }

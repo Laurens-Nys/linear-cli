@@ -11,7 +11,13 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # GitHub-hosted OS images only. Cross-arch binaries are packaged on
+        # Linux via Bun; do not add runner/arch pairs GitHub cannot host.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
@@ -29,3 +35,39 @@ jobs:
 
       - name: Compile host binary
         run: bun run build
+
+      - name: Binary size budget
+        run: bun run check:size
+
+      - name: Startup smoke
+        run: bun run check:startup
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile --os="*" --cpu="*"
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2.10"
+          args: check
+
+      - name: Snapshot package without publishing
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2.10"
+          args: release --snapshot --skip=publish --clean
+
+      - name: Validate snapshot artifacts
+        run: bun scripts/check-snapshot-artifacts.ts

@@ -12,6 +12,9 @@ export interface Config {
 }
 
 export const DEFAULT_LIMIT = 50;
+export const MAX_LIMIT = 250;
+export const LIMIT_RANGE = "an integer from 1 to 250";
+export const LIMIT_HINT = "example: --limit 20";
 
 export type TomlValue = string | number | boolean;
 
@@ -25,22 +28,36 @@ function failConfig(source: string, line: number, message: string, hint: string)
   throw new LinError(EXIT.input, `${source}:${line}: ${message}`, hint);
 }
 
+function limitError(name: string, raw: string): LinError {
+  return new LinError(EXIT.input, `${name} must be ${LIMIT_RANGE}, got "${raw}"`, LIMIT_HINT);
+}
+
+/** Shared validation for file, env, flag, and override limits. */
+export function parseLimit(value: number | string, name: string): number {
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (!/^-?\d+$/.test(raw)) throw limitError(name, value);
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_LIMIT) throw limitError(name, raw);
+    return parsed;
+  }
+  if (!Number.isInteger(value) || value < 1 || value > MAX_LIMIT) throw limitError(name, String(value));
+  return value;
+}
+
 /** Shared wording for `--limit` and `LIN_LIMIT`. */
 export function parseLimitInput(raw: string, name: string): number {
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    throw new LinError(EXIT.input, `${name} needs a number, got "${raw}"`, "example: --limit 20");
-  }
-  return parsed;
+  return parseLimit(raw, name);
 }
 
 function parseLimitValue(value: TomlValue, source: string, line: number): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
+  try {
+    if (typeof value === "number" || typeof value === "string") return parseLimit(value, "limit");
+    throw limitError("limit", String(value));
+  } catch (error) {
+    if (error instanceof LinError) failConfig(source, line, error.message, error.hint ?? LIMIT_HINT);
+    throw error;
   }
-  failConfig(source, line, `limit needs a number, got ${displayValue(value)}`, "example: --limit 20");
 }
 
 /**
@@ -207,7 +224,7 @@ export function resolveConfig(
   }
 
   if (overrides.team !== undefined && overrides.team !== "") config.team = overrides.team;
-  if (overrides.limit !== undefined && Number.isFinite(overrides.limit)) config.limit = overrides.limit;
+  if (overrides.limit !== undefined) config.limit = parseLimit(overrides.limit, "--limit");
 
   if (config.limit === undefined) config.limit = DEFAULT_LIMIT;
   return config;

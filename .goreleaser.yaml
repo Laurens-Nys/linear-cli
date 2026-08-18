@@ -1,6 +1,11 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # Bun compiles the single binary; GoReleaser only packages and publishes it.
-# The bun builder needs GoReleaser v2.6+, homebrew_casks needs v2.10+.
+# The bun builder needs GoReleaser v2.6+; homebrew_casks needs v2.10+.
+# CI and release workflows pin the action to `~> v2.10` so both stay compatible.
+# GitHub release publication is gated in .github/workflows/release.yml by
+# LIN_RELEASE_PUBLISH plus the protected `release` environment.
+# Homebrew cask upload is skip_upload: true until a separate tap approval.
+# Do not add HOMEBREW_TAP_TOKEN or notarize until that approval.
 version: 2
 
 project_name: lin
@@ -43,8 +48,9 @@ release:
   prerelease: auto
 
 homebrew_casks:
-  # The tap repository must already exist before the first stable tag; a
-  # prerelease tag (v0.1.0-rc.1) skips this step through `skip_upload: auto`.
+  # The tap repository must already exist before the first stable tag.
+  # skip_upload stays true until a separate tap approval explicitly changes it
+  # and uncomments HOMEBREW_TAP_TOKEN. Revert both afterward.
   - name: lin
     repository:
       owner: Laurens-Nys
@@ -55,7 +61,7 @@ homebrew_casks:
     homepage: https://github.com/Laurens-Nys/linear-cli
     description: Linear CLI for coding agents
     license: MIT
-    skip_upload: auto
+    skip_upload: true
     hooks:
       post:
         # The binary is not notarized, so macOS would quarantine it.

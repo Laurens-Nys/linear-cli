@@ -5,7 +5,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import skill, { renderSkill, synopsis } from "../src/commands/skill.ts";
+import "../src/commands/index.ts";
+import skill, { renderSkill, SKILL_MAX_BYTES, synopsis, WORKFLOWS } from "../src/commands/skill.ts";
 import { EXIT } from "../src/out.ts";
 import { allCommands, GLOBAL_FLAGS, type CommandSpec } from "../src/registry.ts";
 import { captureStdout, sandbox } from "./harness.ts";
@@ -102,7 +103,7 @@ describe("renderSkill", () => {
       expect(text).toContain(`--${name}`);
       expect(text).toContain(`| ${spec.doc} |`);
     }
-    expect(text).toContain("| `-n, --limit N` | maximum rows to return (default 50) |");
+    expect(text).toContain("| `-n, --limit N` | maximum rows to return, 1-250 (default 50) |");
   });
 
   test("groups commands, one synopsis line and one example each", () => {
@@ -139,6 +140,33 @@ describe("renderSkill", () => {
     expect(text).not.toContain("widget");
     // Real commands only appear when the real registry is passed.
     expect(renderSkill(allCommands())).toContain("## meta");
+  });
+
+  test("puts workflows before the generated inventory", () => {
+    const text = renderSkill(SYNTHETIC);
+    expect(text).toContain(WORKFLOWS);
+    expect(text.indexOf("## Workflows")).toBeGreaterThan(0);
+    expect(text.indexOf("## Workflows")).toBeLessThan(text.indexOf("| global flag |"));
+    expect(text.indexOf("| global flag |")).toBeLessThan(text.indexOf("## gadget"));
+    expect(text).toContain("`lin start ENG-42`");
+    expect(text).toContain("`lin issue update ENG-42 ENG-41 --state Done`");
+    expect(text).toContain("`lin comment add ENG-42 -m @notes.md`");
+    expect(text).toContain("`-m -`");
+    expect(text).toContain("`--all-pages`");
+    expect(text).toContain("`matches:`");
+    expect(text).toContain("`lin doctor`");
+    expect(text).toContain("`lin cache warm`");
+    expect(text).toContain("Rate limited");
+  });
+
+  test("the live cheatsheet stays under the token budget", () => {
+    const text = renderSkill(allCommands());
+    const bytes = new TextEncoder().encode(text).length;
+    expect(bytes).toBeGreaterThan(8_000);
+    expect(bytes).toBeLessThanOrEqual(SKILL_MAX_BYTES);
+    expect(text).toContain("## Workflows");
+    expect(text).toContain("## meta");
+    expect(text).toContain("lin today");
   });
 
   test("stays compact: at most two lines per command", () => {

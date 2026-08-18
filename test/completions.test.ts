@@ -129,7 +129,7 @@ describe("fish", () => {
   });
 
   test("declares the global flags once, unconditionally", () => {
-    expect(script).toContain("complete -c lin -s n -l limit -r -d 'maximum rows to return (default 50)'");
+    expect(script).toContain("complete -c lin -s n -l limit -r -d 'maximum rows to return, 1-250 (default 50)'");
     expect(script).toContain("-l all-pages");
     expect(script).toContain("-l fields");
   });

@@ -1,0 +1,57 @@
+name: live-smoke
+
+# Manual, read-only Linear smoke. Never runs on push/PR. Never mutates.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile --os="*" --cpu="*"
+
+      - name: Compile host binary
+        run: bun run build
+
+      - name: Require LINEAR_API_KEY
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          if [ -z "${LINEAR_API_KEY}" ]; then
+            echo "live smoke requires repository secret LINEAR_API_KEY"
+            echo "Add the secret, then re-run this workflow. The key is never printed."
+            exit 1
+          fi
+
+      - name: Read-only Linear smoke
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          set -eu
+          # Both output streams are discarded so workspace identity, teams,
+          # issues, cache paths, and API error details never reach public logs.
+          # A failed check prints only its static label; the key is never echoed.
+          check() {
+            label="$1"
+            shift
+            echo "$label"
+            if ! "$@" >/dev/null 2>&1; then
+              echo "$label failed"
+              exit 1
+            fi
+          }
+          check "lin auth" ./dist/lin auth
+          check "lin doctor" ./dist/lin doctor
+          check "lin cache warm" ./dist/lin cache warm
+          check "lin team list" ./dist/lin team list
+          check "lin ls -n 5" ./dist/lin ls -n 5
+          check "lin today -n 5" ./dist/lin today -n 5
