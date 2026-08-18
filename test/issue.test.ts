@@ -4,14 +4,18 @@ import { join } from "node:path";
 import { toMeta, writeCached } from "../src/cache.ts";
 import { keyFingerprint } from "../src/client.ts";
 import {
+  allPagesContinuation,
+  blockerCell,
   branchCommand,
+  continuation,
   createCommand,
   listCommand,
+  listDocument,
   updateCommand,
   urlCommand,
   viewCommand,
 } from "../src/commands/issue.ts";
-import { EXIT } from "../src/out.ts";
+import { EXIT, setFields } from "../src/out.ts";
 import type { CommandSpec, Flags } from "../src/registry.ts";
 import { captureStdout, mock, sandbox, type Mock, type MockResponse } from "./harness.ts";
 import { WARM_DATA } from "./fixtures.ts";
@@ -53,6 +57,7 @@ async function run(
   const stub = mock(responses);
   const captured = captureStdout();
   try {
+    setFields(options.flags?.["fields"]);
     await command.run({
       args: (options.args ?? []).map((arg) => arg.replace("<dir>", box.dir)),
       flags: Object.fromEntries(
@@ -107,6 +112,25 @@ function listResponse(nodes: unknown[] = LIST_NODES, hasNextPage = false): MockR
   };
 }
 
+describe("continuation commands", () => {
+  test("all-pages hints skip --after and do not duplicate --all-pages", () => {
+    expect(
+      allPagesContinuation("search", ["login redirect"], {
+        projects: true,
+        docs: true,
+        after: "c2",
+        "all-pages": true,
+      }),
+    ).toBe('lin search "login redirect" --projects --docs --all-pages');
+  });
+
+  test("cursor continuations still append --after last", () => {
+    expect(continuation("search", ["login"], { projects: true, after: "old" }, "c4")).toBe(
+      "lin search login --projects --after c4",
+    );
+  });
+});
+
 describe("issue list", () => {
   test("lists a team's open issues as a TOON table", async () => {
     await run(listCommand, { team: "ENG" }, [listResponse()], (output, stub) => {
@@ -121,6 +145,10 @@ describe("issue list", () => {
         sort: [{ updatedAt: { order: "Descending" } }],
         archived: false,
       });
+      expect(stub.calls[0]?.document).not.toContain("parent {");
+      expect(stub.calls[0]?.document).not.toContain("labels(");
+      expect(stub.calls[0]?.document).not.toContain("inverseRelations");
+      expect(stub.calls[0]?.document).not.toContain(" url");
       expect(output).toBe(
         "issues[3]{id,title,state,assignee,priority,updated}:\n" +
           "  ENG-42,Fix login redirect loop,In Progress,casey,high,2026-07-30\n" +
@@ -241,6 +269,194 @@ describe("issue list", () => {
         );
       },
     );
+  });
+
+  test("--fields selects optional columns from the same query", async () => {
+    const nodes = [
+      {
+        ...LIST_NODES[0],
+        url: "https://linear.app/acme/issue/ENG-42",
+        parent: { identifier: "ENG-30" },
+        project: { name: "Onboarding" },
+        labels: { nodes: [{ name: "Bug", parent: null }, { name: "P0", parent: { name: "Priority" } }] },
+        inverseRelations: { nodes: [{ type: "blocks" }, { type: "related" }] },
+      },
+    ];
+    await run(
+      listCommand,
+      { team: "ENG", flags: { fields: "id,parent,project,labels,blockers,url" } },
+      [listResponse(nodes)],
+      (output, stub) => {
+        expect(stub.calls).toHaveLength(1);
+        expect(stub.calls[0]?.document).toContain("parent { identifier }");
+        expect(stub.calls[0]?.document).toContain("inverseRelations(first: 20)");
+        expect(output).toBe(
+          "issues[1]{id,parent,project,labels,blockers,url}:\n" +
+            '  ENG-42,ENG-30,Onboarding,"Bug,Priority/P0",1,https://linear.app/acme/issue/ENG-42\n',
+        );
+      },
+    );
+  });
+
+  test("--fields id,title does not select optional issue fields", async () => {
+    await run(
+      listCommand,
+      { team: "ENG", flags: { fields: "id,title" } },
+      [listResponse(LIST_NODES.slice(0, 1))],
+      (output, stub) => {
+        expect(stub.calls[0]?.document).toBe(listDocument(true));
+        expect(output).toBe("issues[1]{id,title}:\n  ENG-42,Fix login redirect loop\n");
+      },
+    );
+  });
+
+  test("truncated labels and blockers do not look exact", async () => {
+    const nodes = [
+      {
+        ...LIST_NODES[0],
+        labels: {
+          nodes: [{ name: "Bug", parent: null }],
+          pageInfo: { hasNextPage: true },
+        },
+        inverseRelations: {
+          nodes: [{ type: "blocks" }, { type: "related" }],
+          pageInfo: { hasNextPage: true },
+        },
+      },
+    ];
+    await run(
+      listCommand,
+      { team: "ENG", flags: { fields: "id,labels,blockers" } },
+      [listResponse(nodes)],
+      (output, stub) => {
+        expect(stub.calls[0]?.document).toContain("pageInfo { hasNextPage }");
+        expect(output).toBe("issues[1]{id,labels,blockers}:\n  ENG-42,\"Bug,…\",1+\n");
+      },
+    );
+  });
+
+  test("a capped blockers page without hasNextPage stays an exact count", () => {
+    expect(blockerCell({ nodes: [{ type: "blocks" }, { type: "related" }] })).toBe(1);
+    expect(blockerCell({ nodes: [{ type: "blocks" }], pageInfo: { hasNextPage: false } })).toBe(1);
+    expect(blockerCell({ nodes: [{ type: "blocks" }], pageInfo: { hasNextPage: true } })).toBe("1+");
+  });
+
+  test("bare --fields lists issue list columns without printing rows", async () => {
+    await expect(run(listCommand, { team: "ENG", flags: { fields: true } }, [listResponse()])).rejects.toMatchObject({
+      exitCode: EXIT.input,
+      message: "--fields needs a column list",
+      hint: "fields: id, title, state, assignee, priority, updated, parent, project, labels, blockers, url",
+    });
+  });
+
+  test("--all-pages concatenates pages and drops the continuation", async () => {
+    await run(
+      listCommand,
+      { team: "ENG", limit: 2, flags: { "all-pages": true } },
+      [
+        {
+          match: "LinIssueList",
+          data: {
+            issues: { nodes: LIST_NODES.slice(0, 2), pageInfo: { hasNextPage: true, endCursor: "c2" } },
+          },
+        },
+        {
+          match: "LinIssueList",
+          data: {
+            issues: { nodes: LIST_NODES.slice(2), pageInfo: { hasNextPage: false, endCursor: "c3" } },
+          },
+        },
+      ],
+      (output, stub) => {
+        expect(stub.calls).toHaveLength(2);
+        expect(stub.calls[0]?.variables).toMatchObject({ first: 2, after: null });
+        expect(stub.calls[1]?.variables).toMatchObject({ first: 2, after: "c2" });
+        expect(output).toBe(
+          "issues[3]{id,title,state,assignee,priority,updated}:\n" +
+            "  ENG-42,Fix login redirect loop,In Progress,casey,high,2026-07-30\n" +
+            '  ENG-41,"Rotate webhook secrets, again",Todo,alex,medium,2026-07-29\n' +
+            '  ENG-40,"Handle \\"quoted\\" titles",Todo,,none,2026-07-28\n',
+        );
+        expect(output).not.toContain("# ");
+      },
+    );
+  });
+
+  test("--after + --all-pages starts at the cursor", async () => {
+    await run(
+      listCommand,
+      { team: "ENG", flags: { after: "c2", "all-pages": true } },
+      [
+        {
+          match: "LinIssueList",
+          data: {
+            issues: { nodes: LIST_NODES.slice(2), pageInfo: { hasNextPage: false, endCursor: "c3" } },
+          },
+        },
+      ],
+      (_output, stub) => {
+        expect(stub.calls).toHaveLength(1);
+        expect(stub.calls[0]?.variables).toMatchObject({ after: "c2" });
+      },
+    );
+  });
+
+  test("an empty --all-pages list is a header and no continuation", async () => {
+    await run(
+      listCommand,
+      { team: "ENG", flags: { "all-pages": true } },
+      [listResponse([], false)],
+      (output, stub) => {
+        expect(stub.calls).toHaveLength(1);
+        expect(output).toBe("issues[0]:\n");
+      },
+    );
+  });
+
+  test("a repeated pagination cursor is exit 1", async () => {
+    await expect(
+      run(
+        listCommand,
+        { team: "ENG", flags: { "all-pages": true } },
+        [
+          {
+            match: "LinIssueList",
+            data: {
+              issues: { nodes: LIST_NODES.slice(0, 1), pageInfo: { hasNextPage: true, endCursor: "loop" } },
+            },
+          },
+          {
+            match: "LinIssueList",
+            data: {
+              issues: { nodes: LIST_NODES.slice(1, 2), pageInfo: { hasNextPage: true, endCursor: "loop" } },
+            },
+          },
+        ],
+      ),
+    ).rejects.toMatchObject({
+      exitCode: EXIT.api,
+      message: "pagination cursor repeated",
+    });
+  });
+
+  test("a missing pagination cursor is exit 1", async () => {
+    await expect(
+      run(
+        listCommand,
+        { team: "ENG", flags: { "all-pages": true } },
+        [
+          {
+            match: "LinIssueList",
+            data: {
+              issues: { nodes: LIST_NODES.slice(0, 1), pageInfo: { hasNextPage: true, endCursor: null } },
+            },
+          },
+        ],
+      ),
+    ).rejects.toMatchObject({
+      exitCode: EXIT.api,
+      message: "pagination cursor missing",
+    });
   });
 });
 

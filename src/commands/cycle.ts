@@ -30,6 +30,7 @@ export const cycleList = defineCommand({
   name: "cycle list",
   group: "cycle",
   summary: "list a team's cycles, newest first",
+  fields: LIST_COLUMNS,
   examples: ["lin cycle list --team ENG"],
   async run({ flags, config }) {
     const team = await resolveTeam(config.team);

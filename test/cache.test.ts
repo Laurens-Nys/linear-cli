@@ -13,6 +13,8 @@ import {
   type Meta,
 } from "../src/cache.ts";
 import { keyFingerprint } from "../src/client.ts";
+import { EXIT } from "../src/out.ts";
+import { MAX_PAGES } from "../src/page.ts";
 import { mock, sandbox } from "./harness.ts";
 import { WARM_DATA } from "./fixtures.ts";
 
@@ -229,7 +231,230 @@ describe("load", () => {
       for (const field of ["viewer", "teams(", "states(", "labels(", "templates(", "users(", "projects(", "organization"]) {
         expect(document).toContain(field);
       }
-      expect(document).toContain("states(first: 30) { nodes { id name type position color } }");
+      expect(document).toContain(
+        "states(first: 30) { nodes { id name type position color } pageInfo { hasNextPage endCursor } }",
+      );
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("warm paginates vocabularies that exceed the first-page caps", async () => {
+    const first = structuredClone(WARM_DATA);
+    const eng = first.teams.nodes[0]!;
+    Object.assign(first.teams, { pageInfo: { hasNextPage: true, endCursor: "teams-2" } });
+    first.teams.nodes = [eng];
+    Object.assign(eng.states, { pageInfo: { hasNextPage: true, endCursor: "states-2" } });
+    Object.assign(eng.labels, { pageInfo: { hasNextPage: true, endCursor: "labels-2" } });
+    Object.assign(eng.templates, { pageInfo: { hasNextPage: true, endCursor: "templates-2" } });
+    Object.assign(first.users, { pageInfo: { hasNextPage: true, endCursor: "users-2" } });
+    Object.assign(first.projects, { pageInfo: { hasNextPage: true, endCursor: "projects-2" } });
+    Object.assign(first.organization.labels, { pageInfo: { hasNextPage: true, endCursor: "orglabels-2" } });
+    Object.assign(first.organization.templates, { pageInfo: { hasNextPage: true, endCursor: "orgtemplates-2" } });
+
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinWarm", data: first },
+      {
+        match: "LinCacheTeams",
+        data: {
+          teams: {
+            nodes: [
+              {
+                id: "ffffffff-6666-4666-8666-ffffffffffff",
+                key: "OPS",
+                name: "Operations",
+                states: {
+                  nodes: [{ id: "op-todo", name: "Todo", type: "unstarted", position: 0, color: "#a8a8a8" }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+                labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: "teams-end" },
+          },
+        },
+      },
+      {
+        match: "LinCacheTeamStates",
+        data: {
+          team: {
+            states: {
+              nodes: [{ id: "st-blocked", name: "Blocked", type: "started", position: 4.5, color: "#f7768e" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      {
+        match: "LinCacheTeamLabels",
+        data: {
+          team: {
+            labels: {
+              nodes: [{ id: "lb-ops", name: "Infra", color: "#7aa2f7", parent: null }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      {
+        match: "LinCacheTeamTemplates",
+        data: {
+          team: {
+            templates: {
+              nodes: [{ id: "tpl-inc", name: "Incident", type: "issue" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      {
+        match: "LinCacheUsers",
+        data: {
+          users: {
+            nodes: [
+              {
+                id: "33333333-3333-4333-8333-333333333333",
+                name: "Riley Chen",
+                displayName: "riley",
+                email: "riley@acme.test",
+                active: true,
+                isMe: false,
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+      {
+        match: "LinCacheProjects",
+        data: {
+          projects: {
+            nodes: [
+              {
+                id: "eeeeeeee-5555-4555-8555-eeeeeeeeeeee",
+                slugId: "infra-7g8h9i",
+                name: "Infra",
+                status: { name: "Started" },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+      {
+        match: "LinCacheOrgLabels",
+        data: {
+          organization: {
+            labels: {
+              nodes: [{ id: "lb-legal", name: "Legal", color: "#9ece6a", parent: null, team: null }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      {
+        match: "LinCacheOrgTemplates",
+        data: {
+          organization: {
+            templates: {
+              nodes: [{ id: "tpl-adr", name: "ADR", type: "document" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    ]);
+    try {
+      const loaded = await warm(box.env);
+      expect(stub.calls.map((call) => call.operation)).toEqual([
+        "LinWarm",
+        "LinCacheTeams",
+        "LinCacheTeamStates",
+        "LinCacheTeamLabels",
+        "LinCacheTeamTemplates",
+        "LinCacheUsers",
+        "LinCacheProjects",
+        "LinCacheOrgLabels",
+        "LinCacheOrgTemplates",
+      ]);
+      expect(loaded.teams.map((team) => team.key)).toEqual(["ENG", "OPS"]);
+      expect(loaded.teams[0]?.states.map((state) => state.name)).toContain("Blocked");
+      expect(loaded.teams[0]?.labels.map((label) => label.name)).toContain("Infra");
+      expect(loaded.templates.map((template) => template.name)).toEqual(["Bug report", "Incident", "RFC", "ADR"]);
+      expect(loaded.users.map((user) => user.displayName)).toEqual(["casey", "alex", "riley"]);
+      expect(loaded.projects.map((project) => project.name)).toEqual(["Onboarding", "Billing", "Infra"]);
+      expect(loaded.workspaceLabels.map((label) => label.name)).toEqual(["SecOps", "Legal"]);
+      expect(readCached(box.env)?.users).toHaveLength(3);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("a missing cache cursor fails before writing", async () => {
+    const first = structuredClone(WARM_DATA);
+    Object.assign(first.users, { pageInfo: { hasNextPage: true, endCursor: null } });
+    const box = sandbox();
+    const stub = mock([{ match: "LinWarm", data: first }]);
+    try {
+      await expect(warm(box.env)).rejects.toMatchObject({
+        exitCode: EXIT.api,
+        message: "cache pagination cursor missing",
+      });
+      expect(readCached(box.env)).toBeNull();
+      expect(stub.calls.map((call) => call.operation)).toEqual(["LinWarm"]);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("unique cache cursors still fail at MAX_PAGES before writing", async () => {
+    const first = structuredClone(WARM_DATA);
+    Object.assign(first.users, { pageInfo: { hasNextPage: true, endCursor: "u0" } });
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinWarm", data: first },
+      ...Array.from({ length: MAX_PAGES - 1 }, (_, index) => ({
+        match: "LinCacheUsers",
+        data: {
+          users: { nodes: [], pageInfo: { hasNextPage: true, endCursor: `u${index + 1}` } },
+        },
+      })),
+    ]);
+    try {
+      await expect(warm(box.env)).rejects.toMatchObject({
+        exitCode: EXIT.api,
+        message: "cache pagination exceeded maximum pages",
+      });
+      expect(readCached(box.env)).toBeNull();
+      expect(stub.calls).toHaveLength(MAX_PAGES);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("a repeated cache cursor fails before writing", async () => {
+    const first = structuredClone(WARM_DATA);
+    Object.assign(first.users, { pageInfo: { hasNextPage: true, endCursor: "loop" } });
+    const box = sandbox();
+    const stub = mock([
+      { match: "LinWarm", data: first },
+      {
+        match: "LinCacheUsers",
+        data: { users: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "loop" } } },
+      },
+    ]);
+    try {
+      await expect(warm(box.env)).rejects.toMatchObject({
+        exitCode: EXIT.api,
+        message: "cache pagination cursor repeated",
+      });
+      expect(readCached(box.env)).toBeNull();
     } finally {
       stub.restore();
       box.cleanup();

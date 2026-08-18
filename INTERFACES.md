@@ -87,12 +87,14 @@ Flag types are `string | boolean | number | repeatable`. `repeatable` yields `st
 
 Read flags with the typed helpers — `flagString`, `flagBool`, `flagNumber`, `flagList` — never by casting.
 
-Global flags arrive in `ctx.flags` already parsed: `fields`, `limit` (`-n`), `all`, `after`, `team`, `quiet` (`-q`), `no-cache`, `help` (`-h`), `version`. `ctx.config` gives you `team` and `limit` already resolved through flag > env > project file > global file, so prefer `config.team` and `config.limit` over reading the flags yourself.
+Global flags arrive in `ctx.flags` already parsed: `fields`, `limit` (`-n`), `all-pages`, `after`, `team`, `quiet` (`-q`), `no-cache`, `help` (`-h`), `version`. `ctx.config` gives you `team` and `limit` already resolved through flag > env > project file > global file, so prefer `config.team` and `config.limit` over reading the flags yourself. `--all` is not global; only inbox commands declare it.
+
+`--fields` and `--all-pages` are rejected in `main.ts` before config resolution or `run` unless the command opts in. Set `fields: ["id", "title", ...]` (and optional `extra`) on every pure table command; set `allPages: true` only on `issue list`, `ls`, `triage`, `comment`, and `search`. Bare or invalid `--fields` is validated against that list before any network. `table()` still projects the chosen columns. Non-table commands must not accept `--fields`. Use `collectPages` on connections that expose `pageInfo`; a missing or repeated cursor is exit 1. `lin api --paginate` uses the same cursor contract.
 
 ## out.ts — the only printer
 
 ```ts
-table(key, rows, columns, { more })   // shape 1
+table(key, rows, columns, { more, extra })   // shape 1; extra = optional --fields keys
 record(fields, { body, children })    // shape 2
 created(identifier, url)              // shape 3, create
 changed(identifier, changes)          // shape 3, update diff
@@ -101,7 +103,7 @@ line(text)                            // one bare line (issue branch, issue url)
 raw(text)                             // verbatim, no newline added
 ```
 
-- `columns` both selects and orders the printed fields; extra keys on a row are dropped.
+- `columns` both selects and orders the printed fields; extra keys on a row are dropped. `--fields` overrides that list from the intersection of `columns` plus `options.extra`, in the requested order. Absent `--fields` keeps `columns` byte-for-byte.
 - Values are formatted for you: ISO timestamps collapse to `YYYY-MM-DD`, a field named `priority` holding a number renders as `none/urgent/high/medium/low`, `null` and `undefined` become empty cells, and in records empty fields are omitted entirely. Pass raw API values; do not pre-format.
 - `changes` is `{ field, from, to }[]`. Empty sides render as `none`. Take `from`/`to` from the mutation's read-back response, never from the arguments.
 - `{ more: { count, command } }` appends `# N more · <command>`; `command` must be the exact runnable continuation.

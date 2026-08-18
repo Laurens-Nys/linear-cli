@@ -4,9 +4,8 @@
 import { encode } from "@toon-format/toon";
 import { gqlRaw } from "../client.ts";
 import { EXIT, LinError, raw } from "../out.ts";
+import { missingCursor, repeatedCursor, tooManyPages, walkPages, type PageInfo } from "../page.ts";
 import { defineCommand, flagBool, flagList, flagString } from "../registry.ts";
-
-const MAX_PAGES = 200;
 
 interface ConnectionSite {
   /** Object holding the connection, e.g. `data.team`. */
@@ -21,6 +20,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isConnection(value: unknown): value is { nodes: unknown[]; pageInfo: Record<string, unknown> } {
   return isRecord(value) && Array.isArray(value["nodes"]) && isRecord(value["pageInfo"]);
+}
+
+function asPageInfo(pageInfo: Record<string, unknown>): PageInfo {
+  return {
+    hasNextPage: pageInfo["hasNextPage"] === true,
+    endCursor: typeof pageInfo["endCursor"] === "string" ? pageInfo["endCursor"] : null,
+  };
 }
 
 /** Every Relay connection in the response tree. */
@@ -149,28 +155,47 @@ async function followPages(
 
   const site = sites[0] as ConnectionSite;
   const target = site.container[site.key] as { nodes: unknown[]; pageInfo: Record<string, unknown> };
-  let pageInfo = target.pageInfo;
-  let cursor = pageInfo["endCursor"];
+  const missing = missingCursor(
+    "pagination cursor missing",
+    "the query must return pageInfo { hasNextPage endCursor }",
+  );
+  const repeated = repeatedCursor(
+    "pagination cursor repeated",
+    "stop --paginate or change the query",
+  );
+  const after = typeof variables["after"] === "string" && variables["after"] !== "" ? variables["after"] : null;
+  let lastPageInfo = target.pageInfo;
+  const walked = await walkPages(
+    { nodes: target.nodes, pageInfo: asPageInfo(target.pageInfo) },
+    async (cursor) => {
+      const next = await gqlRaw<Record<string, unknown>>(document, { ...variables, after: cursor });
+      if (next.errors && next.errors.length > 0) failFromGraphQL(next.errors);
 
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    if (pageInfo["hasNextPage"] !== true || typeof cursor !== "string" || cursor === "") return;
+      const nextSites = findConnections(next.data ?? {});
+      const nextSite = nextSites[0];
+      if (!nextSite) throw missing;
+      const connection = nextSite.container[nextSite.key] as {
+        nodes: unknown[];
+        pageInfo: Record<string, unknown>;
+      };
+      lastPageInfo = connection.pageInfo;
+      return { nodes: connection.nodes, pageInfo: asPageInfo(connection.pageInfo) };
+    },
+    after,
+    {
+      missing,
+      repeated,
+      tooMany: tooManyPages(
+        "pagination exceeded maximum pages",
+        "stop --paginate or change the query",
+      ),
+    },
+  );
 
-    const next = await gqlRaw<Record<string, unknown>>(document, { ...variables, after: cursor });
-    if (next.errors && next.errors.length > 0) failFromGraphQL(next.errors);
-
-    const nextSites = findConnections(next.data ?? {});
-    const nextSite = nextSites[0];
-    if (!nextSite) return;
-    const connection = nextSite.container[nextSite.key] as {
-      nodes: unknown[];
-      pageInfo: Record<string, unknown>;
-    };
-
-    target.nodes.push(...connection.nodes);
-    pageInfo = connection.pageInfo;
-    const nextCursor = pageInfo["endCursor"];
-    if (nextCursor === cursor) return; // the cursor stopped moving; stop rather than loop
-    cursor = nextCursor;
-    target.pageInfo = pageInfo;
-  }
+  target.nodes.splice(0, target.nodes.length, ...walked.nodes);
+  target.pageInfo = {
+    ...lastPageInfo,
+    hasNextPage: walked.pageInfo.hasNextPage,
+    endCursor: walked.pageInfo.endCursor,
+  };
 }

@@ -3,8 +3,9 @@
 // change to the CLI.
 
 import { decode } from "@toon-format/toon";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
+  EXIT,
   formatDate,
   priorityNumber,
   priorityWord,
@@ -14,9 +15,19 @@ import {
   renderRecord,
   renderSimpleReceipt,
   renderTable,
+  resetFields,
+  selectColumns,
+  setFields,
   setQuiet,
+  table,
 } from "../src/out.ts";
 import { ISSUE_ROWS } from "./fixtures.ts";
+import { captureStdout } from "./harness.ts";
+
+afterEach(() => {
+  resetFields();
+  setQuiet(false);
+});
 
 describe("shape 1 — tables", () => {
   test("renders the DESIGN.md table, quoting only where it must", () => {
@@ -56,6 +67,74 @@ describe("shape 1 — tables", () => {
   test("columns project and order the output, ignoring extra row keys", () => {
     expect(renderTable("issues", [{ id: "ENG-1", title: "a", extra: "dropped" }], ["title", "id"])).toBe(
       ["issues[1]{title,id}:", "  a,ENG-1"].join("\n"),
+    );
+  });
+});
+
+describe("--fields projection", () => {
+  const defaults = ["id", "title", "state"] as const;
+  const extra = ["url", "parent"] as const;
+
+  test("absent --fields keeps the default columns in order", () => {
+    expect(selectColumns(defaults, extra)).toEqual(["id", "title", "state"]);
+  });
+
+  test("a comma-separated list selects and orders available fields", () => {
+    expect(selectColumns(defaults, extra, "url,id,title")).toEqual(["url", "id", "title"]);
+  });
+
+  test("bare --fields lists the available fields and exits 2", () => {
+    try {
+      selectColumns(defaults, extra, true);
+      throw new Error("expected a throw");
+    } catch (error) {
+      expect(error).toMatchObject({
+        exitCode: EXIT.input,
+        message: "--fields needs a column list",
+        hint: "fields: id, title, state, url, parent",
+      });
+    }
+  });
+
+  test("unknown or empty --fields fail with the available list", () => {
+    try {
+      selectColumns(defaults, extra, "id,nope,also");
+      throw new Error("expected a throw");
+    } catch (error) {
+      expect(error).toMatchObject({
+        exitCode: EXIT.input,
+        message: "unknown fields nope, also",
+        hint: "fields: id, title, state, url, parent",
+      });
+    }
+    try {
+      selectColumns(defaults, extra, "  ,  ");
+      throw new Error("expected a throw");
+    } catch (error) {
+      expect((error as { message: string }).message).toBe("--fields needs a column list");
+    }
+  });
+
+  test("table() applies --fields; renderTable and records do not", () => {
+    setFields("title,id");
+    const captured = captureStdout();
+    try {
+      table("issues", ISSUE_ROWS.slice(0, 1), ["id", "title", "state"]);
+    } finally {
+      captured.restore();
+    }
+    expect(captured.text()).toBe("issues[1]{title,id}:\n  Fix login redirect loop,ENG-42\n");
+    expect(renderTable("issues", ISSUE_ROWS.slice(0, 1), ["id", "title", "state"])).toBe(
+      "issues[1]{id,title,state}:\n  ENG-42,Fix login redirect loop,In Progress",
+    );
+    expect(renderCreated("ENG-42", "https://linear.app/acme/issue/ENG-42")).toBe(
+      "created: ENG-42\nurl: https://linear.app/acme/issue/ENG-42",
+    );
+    expect(renderChanged("ENG-42", [{ field: "state", from: "Todo", to: "In Progress" }])).toContain(
+      "state: Todo -> In Progress",
+    );
+    expect(renderRecord({ id: "ENG-42", title: "Fix login redirect loop" })).toBe(
+      "id: ENG-42\ntitle: Fix login redirect loop",
     );
   });
 });

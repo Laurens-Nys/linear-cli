@@ -34,6 +34,9 @@ Output is TOON: YAML-adjacent, tabular, never JSON. Four shapes:
 - error: stderr, \`error: team ENG has no state "In Progress"\` then a line naming the fix, here \`states: Triage, Todo, Doing, Done\`.
 
 Empty fields are dropped, dates are YYYY-MM-DD, priority is a word (urgent|high|medium|low|none). No color, prompts or pager, piped or not.
+\`--all-pages\` walks remaining pages only on declared paginated lists (\`issue list\`, \`ls\`, \`triage\`, \`comment\`, \`search\`); other commands reject it. inbox \`--all\` means include-read or bulk, never pagination.
+\`--fields a,b\` selects columns only on table commands; bare \`--fields\` lists them. Non-table commands reject it.
+\`lin cache warm\` follows every vocabulary page, then writes once.
 Exit codes: 0 ok, 1 API or network, 2 correctable input (line two lists the valid values), 3 auth, 4 not found.
 Auth: \`export LINEAR_API_KEY=<personal key>\`, else exit 3. Config \`.lin.toml\`: \`team = "ENG"\`, \`limit = 50\`; \`LIN_TEAM\`/\`LIN_LIMIT\` beat the file, flags beat both.
 Shorthand: \`lin ENG-42\` is \`lin issue view ENG-42\`; an issue URL or UUID works anywhere an identifier does.

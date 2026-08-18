@@ -48,6 +48,7 @@ export const milestoneList = defineCommand({
   name: "milestone list",
   group: "milestone",
   summary: "list a project's milestones",
+  fields: MILESTONE_COLUMNS,
   flags: PROJECT_FLAG,
   examples: ["lin milestone list --project Onboarding"],
   async run({ flags, config }) {

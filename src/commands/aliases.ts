@@ -4,8 +4,8 @@
 // Bare-identifier dispatch (`lin ENG-42`) lives in main.ts.
 
 import { gql } from "../client.ts";
-import { changed, EXIT, line, LinError, table, type Change } from "../out.ts";
-import { defineCommand, flagBool, flagString } from "../registry.ts";
+import { changed, EXIT, line, LinError, selectColumns, table, type Change, type MoreInfo } from "../out.ts";
+import { defineCommand, flagBool, flagString, type Flags } from "../registry.ts";
 import {
   issueIdentifierFrom,
   issueIdentifierFromBranch,
@@ -14,9 +14,12 @@ import {
   resolveUser,
 } from "../resolve.ts";
 import {
+  allPagesContinuation,
   clip,
   collapse,
+  collectPages,
   continuation,
+  ISSUE_OPTIONAL_FIELDS,
   limitOf,
   listDocument,
   listRows,
@@ -35,8 +38,13 @@ export const lsCommand = defineCommand({
   name: "ls",
   group: "alias",
   summary: "my open issues, most recently updated first",
+  allPages: true,
+  fields: MINE_COLUMNS,
+  extra: ISSUE_OPTIONAL_FIELDS,
   examples: ["lin ls", "lin ls --team ENG"],
   async run({ flags, config }) {
+    const columns = selectColumns(MINE_COLUMNS, ISSUE_OPTIONAL_FIELDS);
+    const extras = new Set(ISSUE_OPTIONAL_FIELDS.filter((field) => columns.includes(field)));
     const filter: Record<string, unknown> = {
       assignee: { isMe: { eq: true } },
       state: OPEN_STATES,
@@ -46,16 +54,25 @@ export const lsCommand = defineCommand({
     }
 
     const first = limitOf(config);
-    const data = await gql<IssueListResponse>(listDocument(false), {
-      filter,
-      first,
-      after: flagString(flags, "after") ?? null,
-      sort: [SORTS["updated"]],
-      archived: false,
-    });
+    const after = flagString(flags, "after") ?? null;
+    const page = await collectPages(
+      async (cursor) => {
+        const data = await gql<IssueListResponse>(listDocument(false, extras), {
+          filter,
+          first,
+          after: cursor,
+          sort: [SORTS["updated"]],
+          archived: false,
+        });
+        return data.issues;
+      },
+      after,
+      flagBool(flags, "all-pages"),
+    );
 
-    table("issues", listRows(data.issues.nodes), MINE_COLUMNS, {
-      more: morePages(data.issues.pageInfo, undefined, (cursor) => continuation("ls", [], flags, cursor)),
+    table("issues", listRows(page.nodes), MINE_COLUMNS, {
+      extra: ISSUE_OPTIONAL_FIELDS,
+      more: morePages(page.pageInfo, undefined, (cursor) => continuation("ls", [], flags, cursor)),
     });
   },
 });
@@ -199,23 +216,36 @@ export function age(createdAt: string, now: number = Date.now()): string {
   return `${Number.isFinite(days) && days > 0 ? days : 0}d`;
 }
 
+const TRIAGE_COLUMNS = ["id", "title", "age", "priority"] as const;
+
 export const triageCommand = defineCommand({
   name: "triage",
   group: "alias",
   summary: "issues waiting in the team's triage state, oldest first",
+  allPages: true,
+  fields: TRIAGE_COLUMNS,
   examples: ["lin triage", "lin triage --team ENG"],
   async run({ flags, config }) {
+    selectColumns(TRIAGE_COLUMNS);
     const options = resolveOptions(flags);
     const team = await resolveTeam(config.team, options);
 
     const first = limitOf(config);
-    const data = await gql<TriageResponse>(TRIAGE_QUERY, {
-      filter: { team: { id: { eq: team.id } }, state: { type: { eq: "triage" } } },
-      first,
-      after: flagString(flags, "after") ?? null,
-    });
+    const after = flagString(flags, "after") ?? null;
+    const page = await collectPages(
+      async (cursor) => {
+        const data = await gql<TriageResponse>(TRIAGE_QUERY, {
+          filter: { team: { id: { eq: team.id } }, state: { type: { eq: "triage" } } },
+          first,
+          after: cursor,
+        });
+        return data.issues;
+      },
+      after,
+      flagBool(flags, "all-pages"),
+    );
 
-    const rows = data.issues.nodes.map((node) => ({
+    const rows = page.nodes.map((node) => ({
       id: node.identifier,
       title: node.title,
       age: age(node.createdAt),
@@ -223,7 +253,7 @@ export const triageCommand = defineCommand({
     }));
 
     table("issues", rows, ["id", "title", "age", "priority"], {
-      more: morePages(data.issues.pageInfo, undefined, (cursor) => continuation("triage", [], flags, cursor)),
+      more: morePages(page.pageInfo, undefined, (cursor) => continuation("triage", [], flags, cursor)),
     });
   },
 });
@@ -231,14 +261,38 @@ export const triageCommand = defineCommand({
 // --- search -----------------------------------------------------------------
 
 const SNIPPET_CLIP = 80;
+const SEARCH_ISSUE_COLUMNS = ["id", "title", "state", "snippet"] as const;
+const SEARCH_PROJECT_COLUMNS = ["id", "name", "state"] as const;
+const SEARCH_DOC_COLUMNS = ["id", "title", "project", "updated"] as const;
+
+/**
+ * Projects/docs have no user-facing cursor on the combined search query.
+ * A truncated first page must rerun the same search with `--all-pages`.
+ */
+function searchSectionMore(
+  nodes: number,
+  totalCount: number,
+  pageInfo: PageInfo | undefined,
+  allPages: boolean,
+  term: string,
+  flags: Flags,
+): MoreInfo | undefined {
+  if (allPages) return undefined;
+  const extra = totalCount - nodes;
+  if (extra <= 0 && pageInfo?.hasNextPage !== true) return undefined;
+  return {
+    count: extra > 0 ? extra : undefined,
+    command: allPagesContinuation("search", [term], flags),
+  };
+}
 
 export function searchDocument(projects: boolean, docs: boolean): string {
   const extra = [
     projects
-      ? "\n  searchProjects(term: $term, first: $first) { totalCount nodes { slugId name status { name } } }"
+      ? "\n  searchProjects(term: $term, first: $first) { totalCount nodes { slugId name status { name } } pageInfo { hasNextPage endCursor } }"
       : "",
     docs
-      ? "\n  searchDocuments(term: $term, first: $first) { totalCount nodes { slugId title project { name } updatedAt } }"
+      ? "\n  searchDocuments(term: $term, first: $first) { totalCount nodes { slugId title project { name } updatedAt } pageInfo { hasNextPage endCursor } }"
       : "",
   ].join("");
 
@@ -251,26 +305,52 @@ export function searchDocument(projects: boolean, docs: boolean): string {
 }`;
 }
 
+const SEARCH_PROJECTS_QUERY = `query LinSearchProjects($term: String!, $first: Int!, $after: String) {
+  searchProjects(term: $term, first: $first, after: $after) {
+    totalCount
+    nodes { slugId name status { name } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+const SEARCH_DOCUMENTS_QUERY = `query LinSearchDocuments($term: String!, $first: Int!, $after: String) {
+  searchDocuments(term: $term, first: $first, after: $after) {
+    totalCount
+    nodes { slugId title project { name } updatedAt }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+interface SearchIssuePage {
+  totalCount: number;
+  nodes: { identifier: string; title: string; state: { name: string }; description: string | null }[];
+  pageInfo: PageInfo;
+}
+
+interface SearchProjectPage {
+  totalCount: number;
+  nodes: { slugId: string; name: string; status: { name: string } | null }[];
+  pageInfo: PageInfo;
+}
+
+interface SearchDocumentPage {
+  totalCount: number;
+  nodes: { slugId: string; title: string; project: { name: string } | null; updatedAt: string }[];
+  pageInfo: PageInfo;
+}
+
 interface SearchResponse {
-  searchIssues: {
-    totalCount: number;
-    nodes: { identifier: string; title: string; state: { name: string }; description: string | null }[];
-    pageInfo: PageInfo;
-  };
-  searchProjects?: {
-    totalCount: number;
-    nodes: { slugId: string; name: string; status: { name: string } | null }[];
-  };
-  searchDocuments?: {
-    totalCount: number;
-    nodes: { slugId: string; title: string; project: { name: string } | null; updatedAt: string }[];
-  };
+  searchIssues: SearchIssuePage;
+  searchProjects?: SearchProjectPage;
+  searchDocuments?: SearchDocumentPage;
 }
 
 export const searchCommand = defineCommand({
   name: "search",
   group: "alias",
   summary: "full-text search across issues, and optionally projects and documents",
+  allPages: true,
+  fields: SEARCH_ISSUE_COLUMNS,
   args: [{ name: "term", doc: "text to search for", required: true }],
   flags: {
     projects: { type: "boolean", doc: "also search projects" },
@@ -285,15 +365,38 @@ export const searchCommand = defineCommand({
 
     const projects = flagBool(flags, "projects");
     const docs = flagBool(flags, "docs");
+    if ((projects || docs) && flags["fields"] !== undefined) {
+      throw new LinError(
+        EXIT.input,
+        "--fields cannot be combined with --projects or --docs",
+        "omit --fields, or search issues only",
+      );
+    }
+    selectColumns(SEARCH_ISSUE_COLUMNS);
+
     const first = limitOf(config);
+    const after = flagString(flags, "after") ?? null;
+    const allPages = flagBool(flags, "all-pages");
 
     const data = await gql<SearchResponse>(searchDocument(projects, docs), {
       term,
       first,
-      after: flagString(flags, "after") ?? null,
+      after,
     });
 
-    const issues = data.searchIssues;
+    const issues = await collectPages(
+      async (cursor) => {
+        const page = await gql<SearchResponse>(searchDocument(false, false), {
+          term,
+          first,
+          after: cursor,
+        });
+        return page.searchIssues;
+      },
+      after,
+      allPages,
+      data.searchIssues,
+    );
     const rows = issues.nodes.map((node) => ({
       id: node.identifier,
       title: node.title,
@@ -301,35 +404,66 @@ export const searchCommand = defineCommand({
       snippet: node.description ? clip(collapse(node.description), SNIPPET_CLIP) : "",
     }));
 
-    table("issues", rows, ["id", "title", "state", "snippet"], {
-      // Search payloads carry a total, so the count is exact.
-      more: morePages(issues.pageInfo, issues.totalCount - rows.length, (cursor) =>
-        continuation("search", [term], flags, cursor),
+    table("issues", rows, SEARCH_ISSUE_COLUMNS, {
+      // First-page totals are exact. A mid-list --after cannot recover how many
+      // rows were already printed, so that remainder stays unknown.
+      more: morePages(
+        issues.pageInfo,
+        after === null ? data.searchIssues.totalCount - rows.length : undefined,
+        (cursor) => continuation("search", [term], flags, cursor),
       ),
     });
 
     if (data.searchProjects) {
+      const page = await collectPages(
+        async (cursor) => {
+          const next = await gql<{ searchProjects: SearchProjectPage }>(SEARCH_PROJECTS_QUERY, {
+            term,
+            first,
+            after: cursor,
+          });
+          return next.searchProjects;
+        },
+        null,
+        allPages,
+        data.searchProjects,
+      );
       table(
         "projects",
-        data.searchProjects.nodes.map((node) => ({
+        page.nodes.map((node) => ({
           id: node.slugId,
           name: node.name,
           state: node.status?.name,
         })),
-        ["id", "name", "state"],
+        SEARCH_PROJECT_COLUMNS,
+        { more: searchSectionMore(page.nodes.length, data.searchProjects.totalCount, page.pageInfo, allPages, term, flags) },
       );
     }
 
     if (data.searchDocuments) {
+      const page = await collectPages(
+        async (cursor) => {
+          const next = await gql<{ searchDocuments: SearchDocumentPage }>(SEARCH_DOCUMENTS_QUERY, {
+            term,
+            first,
+            after: cursor,
+          });
+          return next.searchDocuments;
+        },
+        null,
+        allPages,
+        data.searchDocuments,
+      );
       table(
         "docs",
-        data.searchDocuments.nodes.map((node) => ({
+        page.nodes.map((node) => ({
           id: node.slugId,
           title: node.title,
           project: node.project?.name,
           updated: node.updatedAt,
         })),
-        ["id", "title", "project", "updated"],
+        SEARCH_DOC_COLUMNS,
+        { more: searchSectionMore(page.nodes.length, data.searchDocuments.totalCount, page.pageInfo, allPages, term, flags) },
       );
     }
   },

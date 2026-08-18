@@ -68,6 +68,8 @@ Lists are TOON tables. When a page is cut, the last line is a comment carrying t
 # 11 more · lin issue list --team ENG --after <cursor>
 ```
 
+`--all-pages` walks every remaining page from `--after` on the declared paginated list commands (`issue list`, `ls`, `triage`, `comment`, `search`) and prints one table with no continuation; other commands reject it. `--fields id,title` selects and orders columns on table commands; bare `--fields` lists the ones that command can print. Non-table commands reject `--fields`. Inbox `--all` still means include-read or bulk, not pagination.
+
 One record is `key: value` lines, then the markdown body between fences, then any sub-tables:
 
 ```
@@ -134,7 +136,7 @@ limit = 50
 
 Unknown keys, malformed lines, and unreadable files fail with the file path and a correction. `LINEAR_API_KEY` is the only way to authenticate, and it is never printed, logged or written to disk. `LIN_TEAM` and `LIN_LIMIT` override the files; flags override everything. Invalid `LIN_LIMIT` and `--limit` fail with the same `needs a number` wording.
 
-Name lookups for teams, states, labels, users, projects and templates resolve against a cache at `~/.cache/lin/<workspace>/meta.json` with a 24 hour life. `lin cache` shows its age, `lin cache warm` refreshes it, `lin cache clear` deletes it, and `--no-cache` skips it for one command.
+Name lookups for teams, states, labels, users, projects and templates resolve against a cache at `~/.cache/lin/<workspace>/meta.json` with a 24 hour life. `lin cache` shows its age, `lin cache warm` follows every vocabulary page then writes once, `lin cache clear` deletes it, and `--no-cache` skips it for one command.
 
 ## For agents
 

@@ -56,6 +56,7 @@ export const docList = defineCommand({
   name: "doc list",
   group: "doc",
   summary: "list documents",
+  fields: LIST_COLUMNS,
   flags: SCOPE_FLAGS,
   examples: ["lin doc list", "lin doc list --project Onboarding"],
   async run({ flags, config }) {

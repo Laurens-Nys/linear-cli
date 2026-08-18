@@ -55,6 +55,7 @@ export const labelList = defineCommand({
   name: "label list",
   group: "label",
   summary: "list team and workspace labels",
+  fields: ["name", "group", "color"],
   examples: ["lin label list", "lin label list --team ENG"],
   async run({ flags, config }) {
     // Scoped to a team: that team's labels plus the workspace-wide ones, since

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ageDays, eventWord, inbox, inboxArchive, inboxRead } from "../src/commands/inbox.ts";
+import { run } from "../src/main.ts";
 import { EXIT, LinError } from "../src/out.ts";
 import { captureStdout, mock, sandbox, type RecordedCall } from "./harness.ts";
 
@@ -120,6 +121,25 @@ describe("inbox", () => {
         "",
       ].join("\n"),
     );
+  });
+
+  test("lin inbox --all still means include-read, not pagination", async () => {
+    const box = sandbox();
+    const stub = mock([{ match: "LinInbox", data: NOTIFICATIONS }]);
+    const captured = captureStdout();
+    try {
+      const code = await run(["inbox", "--all", "-n", "50"]);
+      expect(code).toBe(EXIT.ok);
+      expect(stub.calls).toHaveLength(1);
+      expect(stub.calls[0]?.operation).toBe("LinInbox");
+      expect(stub.calls[0]?.variables).toEqual({ first: 50 });
+      expect(captured.text()).toContain("04eb4e51,comment,,ENG-41,5d");
+      expect(captured.text()).not.toContain("# ");
+    } finally {
+      captured.restore();
+      stub.restore();
+      box.cleanup();
+    }
   });
 
   test("an empty inbox is a header line and nothing else", async () => {

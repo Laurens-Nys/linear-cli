@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetFetch, setFetch, setRetryDelay, type GraphQLError } from "../src/client.ts";
+import { resetFields, setQuiet } from "../src/out.ts";
 
 export interface MockResponse {
   /** Operation name, or any substring of the query document. */
@@ -135,6 +136,8 @@ export interface Sandbox {
  * argument and would otherwise read the real one.
  */
 export function sandbox(extra: Record<string, string> = {}): Sandbox {
+  setQuiet(false);
+  resetFields();
   const dir = mkdtempSync(join(tmpdir(), "lin-test-"));
   const env: NodeJS.ProcessEnv = {
     HOME: dir,
@@ -154,6 +157,8 @@ export function sandbox(extra: Record<string, string> = {}): Sandbox {
     dir,
     env,
     cleanup() {
+      setQuiet(false);
+      resetFields();
       for (const [key, value] of previous) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;

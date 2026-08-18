@@ -73,6 +73,7 @@ export const customerList = defineCommand({
   name: "customer list",
   group: "customer",
   summary: "list the workspace's customers",
+  fields: ["name", "tier", "status"],
   examples: ["lin customer list"],
   async run({ config }) {
     const data = await gql<ListResponse>(LIST_QUERY, { first: config.limit ?? DEFAULT_LIMIT });
@@ -333,6 +334,7 @@ export const needList = defineCommand({
   name: "need list",
   group: "customer",
   summary: "list customer requests",
+  fields: ["ref", "customer", "issue", "body"],
   flags: {
     customer: { type: "string", valueHint: "name", doc: "only this customer's requests" },
     issue: { type: "string", valueHint: "id", doc: "only requests about this issue" },

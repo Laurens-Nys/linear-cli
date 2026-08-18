@@ -50,6 +50,12 @@ export interface CommandSpec {
   summary: string;
   args?: ArgSpec[];
   flags?: Record<string, FlagSpec>;
+  /** `--all-pages` walks remaining pages of this command's list. */
+  allPages?: boolean;
+  /** Default table columns. Presence means `--fields` is supported. */
+  fields?: readonly string[];
+  /** Extra keys `--fields` may select beyond `fields`. */
+  extra?: readonly string[];
   /** At least one, copy-pasteable, starting with "lin ". */
   examples: string[];
   run: (ctx: RunContext) => Promise<void> | void;
@@ -61,6 +67,16 @@ export interface CommandSpec {
 export const GLOBAL_FLAGS: Record<string, FlagSpec> = {
   limit: { type: "number", short: "n", valueHint: "N", doc: "maximum rows to return (default 50)" },
   after: { type: "string", valueHint: "cursor", doc: "start from a pagination cursor" },
+  "all-pages": {
+    type: "boolean",
+    doc: "fetch every remaining page of a paginated list command",
+  },
+  fields: {
+    type: "string",
+    valueHint: "a,b,c",
+    doc: "select and order columns on a table command; bare lists them",
+    bareOk: true,
+  },
   team: { type: "string", valueHint: "KEY", doc: "team key, overriding config" },
   quiet: { type: "boolean", short: "q", doc: "receipts print the bare identifier only" },
   "no-cache": { type: "boolean", doc: "ignore the metadata cache and refetch" },

@@ -4,8 +4,9 @@
 import pkg from "../package.json" with { type: "json" };
 import "./commands/index.ts";
 import { parseLimitInput, resolveConfig } from "./config.ts";
-import { EXIT, LinError, failFrom, line, setQuiet, type ExitCode } from "./out.ts";
+import { EXIT, LinError, failFrom, line, resetFields, selectColumns, setFields, setQuiet, type ExitCode } from "./out.ts";
 import {
+  allCommands,
   allGroups,
   commandsInGroup,
   flagsFor,
@@ -252,6 +253,41 @@ export function renderCommandHelp(command: CommandSpec): string {
 
 // --- dispatch ---------------------------------------------------------------
 
+function supportedNames(ok: (command: CommandSpec) => boolean): string {
+  return allCommands()
+    .filter(ok)
+    .map((command) => command.name)
+    .join(", ");
+}
+
+/** Reject global flags this command does not honor, before any network. */
+export function preflightGlobals(command: CommandSpec, flags: Flags): void {
+  if (flags["all-pages"] === true && command.allPages !== true) {
+    throw new LinError(
+      EXIT.input,
+      `--all-pages is not supported on ${command.name}`,
+      `supported: ${supportedNames((item) => item.allPages === true)}`,
+    );
+  }
+
+  if (flags["fields"] === undefined) return;
+  if (command.fields === undefined) {
+    throw new LinError(
+      EXIT.input,
+      `--fields is not supported on ${command.name}`,
+      `supported: ${supportedNames((item) => item.fields !== undefined)}`,
+    );
+  }
+
+  const requested = flags["fields"] === true ? true : typeof flags["fields"] === "string" ? flags["fields"] : undefined;
+  // `--mine` already implies the viewer, so assignee is not a list column.
+  const defaults =
+    command.name === "issue list" && flags["mine"] === true
+      ? command.fields.filter((field) => field !== "assignee")
+      : command.fields;
+  selectColumns(defaults, command.extra, requested);
+}
+
 function suggest(name: string): string {
   const lower = name.toLowerCase();
   const near = knownNames().filter(
@@ -313,12 +349,19 @@ export async function run(argv: readonly string[]): Promise<ExitCode> {
 
   setQuiet(flags["quiet"] === true);
 
-  const team = typeof flags["team"] === "string" ? flags["team"] : undefined;
-  const limit = typeof flags["limit"] === "number" ? flags["limit"] : undefined;
-  const config = resolveConfig({ team, limit });
+  try {
+    preflightGlobals(found.command, flags);
+    setFields(flags["fields"]);
 
-  await found.command.run({ args, flags, config, command: found.command });
-  return EXIT.ok;
+    const team = typeof flags["team"] === "string" ? flags["team"] : undefined;
+    const limit = typeof flags["limit"] === "number" ? flags["limit"] : undefined;
+    const config = resolveConfig({ team, limit });
+
+    await found.command.run({ args, flags, config, command: found.command });
+    return EXIT.ok;
+  } finally {
+    resetFields();
+  }
 }
 
 async function main(): Promise<void> {

@@ -24,6 +24,7 @@ export const userList = defineCommand({
   name: "user list",
   group: "user",
   summary: "list the workspace's members",
+  fields: ["name", "email", "active"],
   examples: ["lin user list"],
   async run({ config }) {
     const data = await gql<ListResponse>(LIST_QUERY, { first: config.limit ?? DEFAULT_LIMIT });

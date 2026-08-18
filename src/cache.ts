@@ -1,10 +1,13 @@
 // The workspace metadata cache: the small vocabularies name resolution needs.
-// One request fills it; a 24 hour TTL keeps it honest.
+// A first-page warm query plus follow-up pages fill every connection; a 24 hour
+// TTL keeps it honest.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { gql, keyFingerprint } from "./client.ts";
+import { LinError } from "./out.ts";
+import { missingCursor, repeatedCursor, tooManyPages, walkPages, type PageInfo } from "./page.ts";
 
 export const TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -147,46 +150,182 @@ export function clear(env: NodeJS.ProcessEnv = process.env): string[] {
 
 // --- warming ----------------------------------------------------------------
 
-// Page sizes are tuned against Linear's 10,000 point single-query complexity
-// cap, measured live: this shape costs ~3,000 points. Raising `labels` to 50 or
-// `templates` to 20 pushes the estimate over the cap and the request is
-// rejected outright, so grow these only with a live check.
+// First-page sizes stay inside Linear's 10,000 point single-query cap
+// (~3,000 points live). Remaining pages are fetched one connection at a time
+// so a large workspace cannot drop entities and cannot blow the cap.
+const PAGE = {
+  teams: 50,
+  states: 30,
+  labels: 30,
+  templates: 10,
+  users: 100,
+  projects: 100,
+  orgLabels: 100,
+  orgTemplates: 20,
+} as const;
+
+const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
+
 export const WARM_QUERY = `query LinWarm {
   viewer { id name displayName email organization { urlKey name } }
-  teams(first: 50) {
+  teams(first: ${PAGE.teams}) {
     nodes {
       id key name
-      states(first: 30) { nodes { id name type position color } }
-      labels(first: 30) { nodes { id name color parent { name } } }
-      templates(first: 10) { nodes { id name type } }
+      states(first: ${PAGE.states}) { nodes { id name type position color } ${PAGE_INFO} }
+      labels(first: ${PAGE.labels}) { nodes { id name color parent { name } } ${PAGE_INFO} }
+      templates(first: ${PAGE.templates}) { nodes { id name type } ${PAGE_INFO} }
     }
+    ${PAGE_INFO}
   }
-  users(first: 100) { nodes { id name displayName email active isMe } }
-  projects(first: 100) { nodes { id slugId name status { name } } }
+  users(first: ${PAGE.users}) { nodes { id name displayName email active isMe } ${PAGE_INFO} }
+  projects(first: ${PAGE.projects}) { nodes { id slugId name status { name } } ${PAGE_INFO} }
   organization {
-    labels(first: 100) { nodes { id name color parent { name } team { id } } }
-    templates(first: 20) { nodes { id name type } }
+    labels(first: ${PAGE.orgLabels}) { nodes { id name color parent { name } team { id } } ${PAGE_INFO} }
+    templates(first: ${PAGE.orgTemplates}) { nodes { id name type } ${PAGE_INFO} }
   }
 }`;
 
+const WARM_TEAMS_QUERY = `query LinCacheTeams($after: String) {
+  teams(first: ${PAGE.teams}, after: $after) {
+    nodes {
+      id key name
+      states(first: ${PAGE.states}) { nodes { id name type position color } ${PAGE_INFO} }
+      labels(first: ${PAGE.labels}) { nodes { id name color parent { name } } ${PAGE_INFO} }
+      templates(first: ${PAGE.templates}) { nodes { id name type } ${PAGE_INFO} }
+    }
+    ${PAGE_INFO}
+  }
+}`;
+
+const WARM_USERS_QUERY = `query LinCacheUsers($after: String) {
+  users(first: ${PAGE.users}, after: $after) { nodes { id name displayName email active isMe } ${PAGE_INFO} }
+}`;
+
+const WARM_PROJECTS_QUERY = `query LinCacheProjects($after: String) {
+  projects(first: ${PAGE.projects}, after: $after) { nodes { id slugId name status { name } } ${PAGE_INFO} }
+}`;
+
+const WARM_ORG_LABELS_QUERY = `query LinCacheOrgLabels($after: String) {
+  organization { labels(first: ${PAGE.orgLabels}, after: $after) { nodes { id name color parent { name } team { id } } ${PAGE_INFO} } }
+}`;
+
+const WARM_ORG_TEMPLATES_QUERY = `query LinCacheOrgTemplates($after: String) {
+  organization { templates(first: ${PAGE.orgTemplates}, after: $after) { nodes { id name type } ${PAGE_INFO} } }
+}`;
+
+const WARM_TEAM_STATES_QUERY = `query LinCacheTeamStates($id: String!, $after: String) {
+  team(id: $id) { states(first: 50, after: $after) { nodes { id name type position color } ${PAGE_INFO} } }
+}`;
+
+const WARM_TEAM_LABELS_QUERY = `query LinCacheTeamLabels($id: String!, $after: String) {
+  team(id: $id) { labels(first: 50, after: $after) { nodes { id name color parent { name } } ${PAGE_INFO} } }
+}`;
+
+const WARM_TEAM_TEMPLATES_QUERY = `query LinCacheTeamTemplates($id: String!, $after: String) {
+  team(id: $id) { templates(first: 50, after: $after) { nodes { id name type } ${PAGE_INFO} } }
+}`;
+
+interface NestedPageInfo {
+  hasNextPage?: boolean;
+  endCursor?: string | null;
+}
+
+interface Connection<T> {
+  nodes: T[];
+  pageInfo?: NestedPageInfo;
+}
+
+interface WarmState {
+  id: string;
+  name: string;
+  type: string;
+  position: number;
+  color: string;
+}
+
+interface WarmLabel {
+  id: string;
+  name: string;
+  color: string;
+  parent: { name: string } | null;
+  team?: { id: string } | null;
+}
+
+interface WarmTemplate {
+  id: string;
+  name: string;
+  type: string;
+}
+
+interface WarmTeam {
+  id: string;
+  key: string;
+  name: string;
+  states: Connection<WarmState>;
+  labels: Connection<WarmLabel>;
+  templates: Connection<WarmTemplate>;
+}
+
+interface WarmUser {
+  id: string;
+  name: string;
+  displayName: string;
+  email: string;
+  active: boolean;
+  isMe: boolean;
+}
+
+interface WarmProject {
+  id: string;
+  slugId: string;
+  name: string;
+  status: { name: string } | null;
+}
+
 interface WarmResponse {
   viewer: { id: string; name: string; displayName: string; email: string; organization: { urlKey: string; name: string } };
-  teams: {
-    nodes: {
-      id: string;
-      key: string;
-      name: string;
-      states: { nodes: { id: string; name: string; type: string; position: number; color: string }[] };
-      labels: { nodes: { id: string; name: string; color: string; parent: { name: string } | null }[] };
-      templates: { nodes: { id: string; name: string; type: string }[] };
-    }[];
-  };
-  users: { nodes: { id: string; name: string; displayName: string; email: string; active: boolean; isMe: boolean }[] };
-  projects: { nodes: { id: string; slugId: string; name: string; status: { name: string } | null }[] };
+  teams: Connection<WarmTeam>;
+  users: Connection<WarmUser>;
+  projects: Connection<WarmProject>;
   organization: {
-    labels: { nodes: { id: string; name: string; color: string; parent: { name: string } | null; team: { id: string } | null }[] };
-    templates: { nodes: { id: string; name: string; type: string }[] };
+    labels: Connection<WarmLabel>;
+    templates: Connection<WarmTemplate>;
   };
+}
+
+function cacheMissingCursor(): LinError {
+  return missingCursor("cache pagination cursor missing", "retry lin cache warm");
+}
+
+function cacheRepeatedCursor(): LinError {
+  return repeatedCursor("cache pagination cursor repeated", "retry lin cache warm");
+}
+
+function asPage<T>(connection: Connection<T>): { nodes: T[]; pageInfo: PageInfo } {
+  return {
+    nodes: connection.nodes,
+    pageInfo: {
+      hasNextPage: connection.pageInfo?.hasNextPage === true,
+      endCursor: typeof connection.pageInfo?.endCursor === "string" ? connection.pageInfo.endCursor : null,
+    },
+  };
+}
+
+async function completeConnection<T>(
+  first: Connection<T>,
+  fetchPage: (after: string) => Promise<Connection<T>>,
+): Promise<T[]> {
+  const walked = await walkPages(
+    asPage(first),
+    async (after) => asPage(await fetchPage(after)),
+    null,
+    {
+      missing: cacheMissingCursor(),
+      repeated: cacheRepeatedCursor(),
+      tooMany: tooManyPages("cache pagination exceeded maximum pages", "retry lin cache warm"),
+    },
+  );
+  return walked.nodes;
 }
 
 export function toMeta(data: WarmResponse, fingerprint: string, now: Date = new Date()): Meta {
@@ -258,13 +397,91 @@ export function toMeta(data: WarmResponse, fingerprint: string, now: Date = new 
   };
 }
 
-/** Fetch every vocabulary in one request. Does not write the cache. */
-async function fetchMeta(env: NodeJS.ProcessEnv): Promise<Meta> {
-  const data = await gql<WarmResponse>(WARM_QUERY, undefined, { env });
-  return toMeta(data, keyFingerprint(env));
+async function completeTeam(team: WarmTeam, env: NodeJS.ProcessEnv): Promise<WarmTeam> {
+  return {
+    ...team,
+    states: {
+      nodes: await completeConnection(team.states, async (after) => {
+        const data = await gql<{ team: { states: Connection<WarmState> } }>(
+          WARM_TEAM_STATES_QUERY,
+          { id: team.id, after },
+          { env },
+        );
+        return data.team.states;
+      }),
+    },
+    labels: {
+      nodes: await completeConnection(team.labels, async (after) => {
+        const data = await gql<{ team: { labels: Connection<WarmLabel> } }>(
+          WARM_TEAM_LABELS_QUERY,
+          { id: team.id, after },
+          { env },
+        );
+        return data.team.labels;
+      }),
+    },
+    templates: {
+      nodes: await completeConnection(team.templates, async (after) => {
+        const data = await gql<{ team: { templates: Connection<WarmTemplate> } }>(
+          WARM_TEAM_TEMPLATES_QUERY,
+          { id: team.id, after },
+          { env },
+        );
+        return data.team.templates;
+      }),
+    },
+  };
 }
 
-/** Refetch every vocabulary in one request and write it to disk. */
+/** Fetch every vocabulary, following pageInfo until each connection is complete. */
+async function fetchMeta(env: NodeJS.ProcessEnv): Promise<Meta> {
+  const first = await gql<WarmResponse>(WARM_QUERY, undefined, { env });
+
+  const teamPages = await completeConnection(first.teams, async (after) => {
+    const data = await gql<{ teams: Connection<WarmTeam> }>(WARM_TEAMS_QUERY, { after }, { env });
+    return data.teams;
+  });
+  const teams: WarmTeam[] = [];
+  for (const team of teamPages) teams.push(await completeTeam(team, env));
+
+  const users = await completeConnection(first.users, async (after) => {
+    const data = await gql<{ users: Connection<WarmUser> }>(WARM_USERS_QUERY, { after }, { env });
+    return data.users;
+  });
+  const projects = await completeConnection(first.projects, async (after) => {
+    const data = await gql<{ projects: Connection<WarmProject> }>(WARM_PROJECTS_QUERY, { after }, { env });
+    return data.projects;
+  });
+  const orgLabels = await completeConnection(first.organization.labels, async (after) => {
+    const data = await gql<{ organization: { labels: Connection<WarmLabel> } }>(
+      WARM_ORG_LABELS_QUERY,
+      { after },
+      { env },
+    );
+    return data.organization.labels;
+  });
+  const orgTemplates = await completeConnection(first.organization.templates, async (after) => {
+    const data = await gql<{ organization: { templates: Connection<WarmTemplate> } }>(
+      WARM_ORG_TEMPLATES_QUERY,
+      { after },
+      { env },
+    );
+    return data.organization.templates;
+  });
+
+  return toMeta(
+    {
+      viewer: first.viewer,
+      teams: { nodes: teams },
+      users: { nodes: users },
+      projects: { nodes: projects },
+      organization: { labels: { nodes: orgLabels }, templates: { nodes: orgTemplates } },
+    },
+    keyFingerprint(env),
+  );
+}
+
+/** Refetch every vocabulary, paginating each connection, then write once. */
 export async function warm(env: NodeJS.ProcessEnv = process.env): Promise<Meta> {
   const meta = await fetchMeta(env);
   writeCached(meta, env);

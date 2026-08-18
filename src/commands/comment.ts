@@ -6,11 +6,12 @@
 // too and a ref from another issue is a miss rather than a wrong write.
 
 import { gql } from "../client.ts";
-import { created, EXIT, LinError, simpleReceipt, table } from "../out.ts";
-import { defineCommand, flagString, type CommandSpec, type Flags } from "../registry.ts";
+import { created, EXIT, LinError, selectColumns, simpleReceipt, table } from "../out.ts";
+import { defineCommand, flagBool, flagString, type CommandSpec, type Flags } from "../registry.ts";
 import { resolveIssueUUID } from "../resolve.ts";
 import {
   bodyInput,
+  collectPages,
   COMMENT_COLUMNS,
   COMMENT_SELECTION,
   commentRef,
@@ -104,21 +105,32 @@ export const listCommand = defineCommand({
   name: "comment",
   group: "comment",
   summary: "list an issue's comments oldest first; a resolved thread is marked (resolved) in its body",
+  allPages: true,
+  fields: COMMENT_COLUMNS,
   args: [{ name: "issue", doc: "issue identifier, URL or UUID", required: true }],
   examples: ["lin comment ENG-42"],
   async run({ args, flags, config }) {
+    selectColumns(COMMENT_COLUMNS);
     const issueRef = issueArg(args, "comment");
     const first = limitOf(config);
-    const data = await gql<ListResponse>(LIST_QUERY, {
-      id: issueRef,
-      first,
-      after: flagString(flags, "after") ?? null,
-    });
+    const after = flagString(flags, "after") ?? null;
+    const page = await collectPages(
+      async (cursor) => {
+        const data = await gql<ListResponse>(LIST_QUERY, {
+          id: issueRef,
+          first,
+          after: cursor,
+        });
+        return data.issue.comments;
+      },
+      after,
+      flagBool(flags, "all-pages"),
+    );
 
     // Oldest first is the contract; the API's own order is not guaranteed.
-    const nodes = [...data.issue.comments.nodes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const nodes = [...page.nodes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     table("comments", commentRows(nodes), COMMENT_COLUMNS, {
-      more: morePages(data.issue.comments.pageInfo, undefined, (cursor) =>
+      more: morePages(page.pageInfo, undefined, (cursor) =>
         continuation("comment", [args[0] as string], flags, cursor),
       ),
     });

@@ -234,6 +234,7 @@ export const projectList = defineCommand({
   name: "project list",
   group: "project",
   summary: "list projects",
+  fields: LIST_COLUMNS,
   flags: {
     initiative: { type: "string", valueHint: "ref", doc: "only projects in this initiative" },
     state: { type: "string", valueHint: "name", doc: "only projects in this status" },
@@ -605,6 +606,7 @@ export const projectPosts = defineCommand({
   name: "project posts",
   group: "project",
   summary: "list a project's status updates, newest first",
+  fields: POST_COLUMNS,
   args: [{ name: "project", doc: "project name, slug id, or UUID", required: true }],
   examples: ["lin project posts Onboarding", "lin project posts Onboarding -n 10"],
   async run({ args, config }) {

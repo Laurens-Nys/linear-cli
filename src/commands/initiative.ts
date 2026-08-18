@@ -63,6 +63,7 @@ export const initiativeList = defineCommand({
   name: "initiative list",
   group: "initiative",
   summary: "list initiatives",
+  fields: LIST_COLUMNS,
   examples: ["lin initiative list"],
   async run({ flags, config }) {
     const data = await gql<ListResponse>(LIST_QUERY, {
@@ -457,6 +458,7 @@ export const initiativePosts = defineCommand({
   name: "initiative posts",
   group: "initiative",
   summary: "list an initiative's status updates, newest first",
+  fields: POST_COLUMNS,
   args: [{ name: "initiative", doc: "initiative name, slug id, or UUID", required: true }],
   examples: ["lin initiative posts Platform"],
   async run({ args, config }) {

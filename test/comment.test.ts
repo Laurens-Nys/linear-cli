@@ -10,7 +10,7 @@ import {
   resolveCommand,
   unresolveCommand,
 } from "../src/commands/comment.ts";
-import { EXIT } from "../src/out.ts";
+import { EXIT, setFields } from "../src/out.ts";
 import type { CommandSpec, Flags } from "../src/registry.ts";
 import { captureStdout, mock, sandbox, type Mock, type MockResponse } from "./harness.ts";
 import { WARM_DATA } from "./fixtures.ts";
@@ -45,6 +45,7 @@ async function run(
   const stub = mock(responses);
   const captured = captureStdout();
   try {
+    setFields(options.flags?.["fields"]);
     await command.run({
       args: options.args ?? [],
       flags: Object.fromEntries(
@@ -118,6 +119,85 @@ describe("comment list", () => {
         );
       },
     );
+  });
+
+  test("--all-pages concatenates comments then sorts oldest first", async () => {
+    await run(
+      listCommand,
+      { args: ["ENG-42"], flags: { "all-pages": true } },
+      [
+        {
+          match: "LinCommentList",
+          data: {
+            issue: {
+              comments: {
+                nodes: [
+                  {
+                    id: SECOND,
+                    createdAt: "2026-07-30T09:15:00.000Z",
+                    body: "Fix pushed for review",
+                    resolvedAt: null,
+                    user: null,
+                    botActor: { name: "agent" },
+                  },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: "c1" },
+              },
+            },
+          },
+        },
+        {
+          match: "LinCommentList",
+          data: {
+            issue: {
+              comments: {
+                nodes: [
+                  {
+                    id: FIRST,
+                    createdAt: "2026-07-29T08:00:00.000Z",
+                    body: "Repro first",
+                    resolvedAt: null,
+                    user: { displayName: "casey" },
+                    botActor: null,
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: "c2" },
+              },
+            },
+          },
+        },
+      ],
+      (output, stub) => {
+        expect(stub.calls.map((call) => call.variables?.after)).toEqual([null, "c1"]);
+        expect(output).toBe(
+          "comments[2]{ref,author,date,body}:\n" +
+            "  9f2ab41c,casey,2026-07-29,Repro first\n" +
+            "  1c0d88ee,agent,2026-07-30,Fix pushed for review\n",
+        );
+      },
+    );
+  });
+
+  test("a missing comment pagination cursor is exit 1", async () => {
+    await expect(
+      run(
+        listCommand,
+        { args: ["ENG-42"], flags: { "all-pages": true } },
+        [
+          {
+            match: "LinCommentList",
+            data: {
+              issue: {
+                comments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "" } },
+              },
+            },
+          },
+        ],
+      ),
+    ).rejects.toMatchObject({
+      exitCode: EXIT.api,
+      message: "pagination cursor missing",
+    });
   });
 
   test("an issue with no comments prints an empty table", async () => {

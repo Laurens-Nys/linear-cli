@@ -87,6 +87,10 @@ export const inbox = defineCommand({
   name: "inbox",
   group: "inbox",
   summary: "show unread notifications, newest first",
+  fields: ["ref", "type", "actor", "target", "age"],
+  flags: {
+    all: { type: "boolean", doc: "include read notifications" },
+  },
   examples: ["lin inbox", "lin inbox --all"],
   async run({ flags, config }) {
     const includeRead = flagBool(flags, "all");
@@ -183,6 +187,9 @@ export const inboxRead = defineCommand({
   group: "inbox",
   summary: "mark notifications as read",
   args: [{ name: "ref", doc: "notification ref from lin inbox", variadic: true }],
+  flags: {
+    all: { type: "boolean", doc: "mark every unread notification read" },
+  },
   examples: ["lin inbox read 9f2ab41c", "lin inbox read --all"],
   async run({ args, flags }) {
     const everything = flagBool(flags, "all");
@@ -209,6 +216,9 @@ export const inboxArchive = defineCommand({
   group: "inbox",
   summary: "archive notifications out of the inbox",
   args: [{ name: "ref", doc: "notification ref from lin inbox", variadic: true }],
+  flags: {
+    all: { type: "boolean", doc: "archive every notification" },
+  },
   examples: ["lin inbox archive 9f2ab41c", "lin inbox archive --all"],
   async run({ args, flags }) {
     const everything = flagBool(flags, "all");

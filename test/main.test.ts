@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseArgs, renderCommandHelp, renderGlobalHelp, renderGroupHelp, run, VERSION } from "../src/main.ts";
-import { EXIT } from "../src/out.ts";
-import { getCommand, GLOBAL_FLAGS, type FlagSpec } from "../src/registry.ts";
+import { EXIT, selectColumns } from "../src/out.ts";
+import { allCommands, getCommand, GLOBAL_FLAGS, type FlagSpec } from "../src/registry.ts";
 import { captureStdout, mock, sandbox } from "./harness.ts";
 
 const SPECS: Record<string, FlagSpec> = {
@@ -63,12 +63,13 @@ describe("flag parsing", () => {
   });
 
   test("a bareOk flag may stand alone or take a value", () => {
-    const specs = {
-      ...SPECS,
-      fields: { type: "string", valueHint: "a,b,c", doc: "columns", bareOk: true } as FlagSpec,
-    };
-    expect(parseArgs(["--fields"], specs).flags["fields"]).toBe(true);
-    expect(parseArgs(["--fields", "id,title"], specs).flags["fields"]).toBe("id,title");
+    expect(parseArgs(["--fields"], SPECS).flags["fields"]).toBe(true);
+    expect(parseArgs(["--fields", "id,title"], SPECS).flags["fields"]).toBe("id,title");
+    expect(parseArgs(["--all-pages"], SPECS).flags["all-pages"]).toBe(true);
+  });
+
+  test("--all is not a global flag", () => {
+    expect(() => parseArgs(["--all"], SPECS)).toThrow(/unknown flag --all/);
   });
 
   test("-- ends flag parsing", () => {
@@ -204,6 +205,189 @@ describe("dispatch", () => {
       hint: expect.stringContaining("auth"),
     });
   });
+
+  test("--all is unknown on issue list; pagination is --all-pages", async () => {
+    await expect(run(["issue", "list", "--all"])).rejects.toMatchObject({
+      exitCode: EXIT.input,
+      message: "unknown flag --all",
+      hint: expect.stringContaining("--all-pages"),
+    });
+  });
+
+  test("only declared commands accept --all-pages and --fields", () => {
+    expect(allCommands().filter((command) => command.allPages).map((command) => command.name)).toEqual([
+      "comment",
+      "issue list",
+      "ls",
+      "search",
+      "triage",
+    ]);
+    expect(allCommands().filter((command) => command.fields !== undefined).map((command) => command.name)).toEqual([
+      "comment",
+      "customer list",
+      "cycle list",
+      "doc list",
+      "inbox",
+      "initiative list",
+      "initiative posts",
+      "issue list",
+      "label list",
+      "ls",
+      "milestone list",
+      "need list",
+      "project list",
+      "project posts",
+      "search",
+      "team list",
+      "team states",
+      "template list",
+      "triage",
+      "user list",
+    ]);
+  });
+
+  test("--all-pages on a non-list command fails before the network", async () => {
+    const box = sandbox();
+    const stub = mock([]);
+    try {
+      await expect(run(["issue", "view", "ENG-42", "--all-pages"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: "--all-pages is not supported on issue view",
+        hint: expect.stringContaining("issue list"),
+      });
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("--fields on raw output fails before the network", async () => {
+    const box = sandbox();
+    const stub = mock([]);
+    try {
+      await expect(run(["api", "query { viewer { id } }", "--fields", "id"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: "--fields is not supported on api",
+      });
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("--fields on a record command fails before the network", async () => {
+    const box = sandbox();
+    const stub = mock([]);
+    try {
+      await expect(run(["issue", "view", "ENG-42", "--fields", "id"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: "--fields is not supported on issue view",
+        hint: expect.stringContaining("issue list"),
+      });
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("bare --fields on issue list validates before any page walk", async () => {
+    const box = sandbox();
+    const stub = mock([]);
+    try {
+      await expect(run(["issue", "list", "--team", "ENG", "--fields", "--all-pages"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: "--fields needs a column list",
+        hint: expect.stringContaining("blockers"),
+      });
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("invalid --fields on issue list validates before any page walk", async () => {
+    const box = sandbox();
+    const stub = mock([]);
+    try {
+      await expect(run(["issue", "list", "--team", "ENG", "--fields", "nope", "--all-pages"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: "unknown field nope",
+      });
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("--mine --fields assignee is rejected before the network", async () => {
+    const box = sandbox();
+    const stub = mock([]);
+    try {
+      await expect(run(["issue", "list", "--mine", "--fields", "assignee"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: "unknown field assignee",
+        hint: "fields: id, title, state, priority, updated, parent, project, labels, blockers, url",
+      });
+      expect(stub.calls).toHaveLength(0);
+    } finally {
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("inbox --all is still the local include-read flag", async () => {
+    const box = sandbox();
+    const stub = mock([
+      {
+        match: "LinInbox",
+        data: { notifications: { nodes: [] } },
+      },
+    ]);
+    const captured = captureStdout();
+    try {
+      const code = await run(["inbox", "--all"]);
+      expect(code).toBe(EXIT.ok);
+      expect(stub.calls).toHaveLength(1);
+    } finally {
+      captured.restore();
+      stub.restore();
+      box.cleanup();
+    }
+  });
+
+  test("fields state resets when config resolution throws", async () => {
+    const box = sandbox({ LIN_LIMIT: "nope" });
+    try {
+      await expect(run(["ls", "--fields", "id"])).rejects.toMatchObject({
+        exitCode: EXIT.input,
+        message: expect.stringMatching(/LIN_LIMIT/),
+      });
+    } finally {
+      box.cleanup();
+    }
+
+    expect(selectColumns(["id", "title"])).toEqual(["id", "title"]);
+
+    const again = sandbox();
+    const stub = mock([
+      { match: "LinIssueList", data: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } },
+    ]);
+    const captured = captureStdout();
+    try {
+      const code = await run(["ls"]);
+      expect(code).toBe(EXIT.ok);
+      expect(captured.text()).toBe("issues[0]:\n");
+    } finally {
+      captured.restore();
+      stub.restore();
+      again.cleanup();
+    }
+  });
 });
 
 describe("help rendering comes from the registry", () => {
@@ -212,6 +396,9 @@ describe("help rendering comes from the registry", () => {
     for (const name of ["api", "auth", "cache", "cache clear", "cache warm", "schema"]) {
       expect(help).toContain(name);
     }
+    expect(help).toContain("--all-pages");
+    expect(help).toContain("--fields");
+    expect(help).not.toMatch(/--all[^-]/);
     expect(help).toContain("lin ENG-42 is shorthand for lin issue view ENG-42");
   });
 

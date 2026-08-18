@@ -116,6 +116,73 @@ export interface MoreInfo {
 
 export interface TableOptions {
   more?: MoreInfo | undefined;
+  /** Extra keys `--fields` may select beyond the default `columns`. */
+  extra?: readonly string[] | undefined;
+}
+
+// --- --fields ---------------------------------------------------------------
+
+let fieldsFlag: string | true | undefined;
+
+/** Global `--fields`: a column list, `true` when bare, or unset. */
+export function setFields(value: unknown): void {
+  fieldsFlag = value === true ? true : typeof value === "string" ? value : undefined;
+}
+
+export function resetFields(): void {
+  fieldsFlag = undefined;
+}
+
+function availableColumns(defaults: readonly string[], extra: readonly string[] = []): string[] {
+  const columns = [...defaults];
+  for (const field of extra) {
+    if (!columns.includes(field)) columns.push(field);
+  }
+  return columns;
+}
+
+/**
+ * Default columns when `--fields` is absent. Otherwise the caller's list,
+ * validated against `defaults` plus `extra`, in the requested order.
+ */
+export function selectColumns(
+  defaults: readonly string[],
+  extra: readonly string[] = [],
+  requested: string | boolean | undefined = fieldsFlag,
+): readonly string[] {
+  if (requested === undefined) return defaults;
+
+  const available = availableColumns(defaults, extra);
+  const listed = `fields: ${available.join(", ")}`;
+  if (requested === true || typeof requested !== "string") {
+    throw new LinError(EXIT.input, "--fields needs a column list", listed);
+  }
+
+  const names = requested
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  if (names.length === 0) {
+    throw new LinError(EXIT.input, "--fields needs a column list", listed);
+  }
+
+  const seen = new Set<string>();
+  const chosen: string[] = [];
+  const unknown: string[] = [];
+  for (const name of names) {
+    if (!available.includes(name)) {
+      if (!unknown.includes(name)) unknown.push(name);
+      continue;
+    }
+    if (seen.has(name)) continue;
+    seen.add(name);
+    chosen.push(name);
+  }
+  if (unknown.length > 0) {
+    const label = unknown.length === 1 ? "unknown field" : "unknown fields";
+    throw new LinError(EXIT.input, `${label} ${unknown.join(", ")}`, listed);
+  }
+  return chosen;
 }
 
 export type Row = Record<string, unknown>;
@@ -249,9 +316,9 @@ export function table(
   key: string,
   rows: readonly Row[],
   columns: readonly string[],
-  options?: TableOptions,
+  options: TableOptions = {},
 ): void {
-  write(renderTable(key, rows, columns, options));
+  write(renderTable(key, rows, selectColumns(columns, options.extra), options));
 }
 
 export function record(fields: Row, options?: RecordOptions): void {

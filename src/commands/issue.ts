@@ -18,11 +18,13 @@ import {
   PRIORITY_WORDS,
   priorityNumber,
   record,
+  selectColumns,
   table,
   type Change,
   type MoreInfo,
   type Row,
 } from "../out.ts";
+import { collectPages, type PageInfo } from "../page.ts";
 import {
   defineCommand,
   flagBool,
@@ -118,6 +120,19 @@ function quoteArg(value: string): string {
   return /\s/.test(value) ? `"${value}"` : value;
 }
 
+const CONTINUATION_SKIP = new Set(["after", "help", "version", "all-pages"]);
+
+function flagParts(flags: Flags): string[] {
+  const parts: string[] = [];
+  for (const [flag, value] of Object.entries(flags)) {
+    if (CONTINUATION_SKIP.has(flag)) continue;
+    if (value === true) parts.push(`--${flag}`);
+    else if (Array.isArray(value)) for (const item of value) parts.push(`--${flag} ${quoteArg(item)}`);
+    else if (typeof value !== "boolean") parts.push(`--${flag} ${quoteArg(String(value))}`);
+  }
+  return parts;
+}
+
 /**
  * The exact command that fetches the next page: this invocation's arguments and
  * flags, with the cursor appended.
@@ -128,20 +143,19 @@ export function continuation(
   flags: Flags,
   cursor: string,
 ): string {
-  const parts = [`lin ${name}`, ...args.map(quoteArg)];
-  for (const [flag, value] of Object.entries(flags)) {
-    if (flag === "after" || flag === "help" || flag === "version") continue;
-    if (value === true) parts.push(`--${flag}`);
-    else if (Array.isArray(value)) for (const item of value) parts.push(`--${flag} ${quoteArg(item)}`);
-    else if (typeof value !== "boolean") parts.push(`--${flag} ${quoteArg(String(value))}`);
-  }
-  return `${parts.join(" ")} --after ${cursor}`;
+  return [`lin ${name}`, ...args.map(quoteArg), ...flagParts(flags), `--after ${cursor}`].join(" ");
 }
 
-export interface PageInfo {
-  hasNextPage: boolean;
-  endCursor: string | null;
+/**
+ * Rerun this invocation with `--all-pages`. Search projects/docs have no
+ * user-facing cursor, so the hint must not invent `--after` or duplicate flags.
+ */
+export function allPagesContinuation(name: string, args: readonly string[], flags: Flags): string {
+  return [`lin ${name}`, ...args.map(quoteArg), ...flagParts(flags), "--all-pages"].join(" ");
 }
+
+export type { PageInfo };
+export { collectPages };
 
 /**
  * The continuation comment line. Plain connections carry no total, so callers
@@ -194,9 +208,17 @@ export function commentRows(nodes: readonly CommentNode[]): Row[] {
 
 // --- issue list -------------------------------------------------------------
 
-const ISSUE_COLUMNS = ["id", "title", "state", "assignee", "priority", "updated"] as const;
+export const ISSUE_COLUMNS = ["id", "title", "state", "assignee", "priority", "updated"] as const;
 /** `--mine` and `lin ls` already know the assignee. */
 export const MINE_COLUMNS = ["id", "title", "state", "priority", "updated"] as const;
+/** Optional `--fields` for issue list / ls; selected only when requested. */
+export const ISSUE_OPTIONAL_FIELDS = ["parent", "project", "labels", "blockers", "url"] as const;
+const LIST_LABEL_PAGE = 10;
+const LIST_BLOCKER_PAGE = 20;
+
+interface NestedPage {
+  hasNextPage?: boolean;
+}
 
 export interface IssueListNode {
   identifier: string;
@@ -205,6 +227,11 @@ export interface IssueListNode {
   assignee?: { displayName: string } | null;
   priority: number;
   updatedAt: string;
+  url?: string;
+  parent?: { identifier: string } | null;
+  project?: { name: string } | null;
+  labels?: { nodes: { name: string; parent: { name: string } | null }[]; pageInfo?: NestedPage };
+  inverseRelations?: { nodes: { type: string }[]; pageInfo?: NestedPage };
 }
 
 export interface IssueListResponse {
@@ -231,13 +258,49 @@ function sortInput(flags: Flags): unknown[] {
 /** Anything not completed and not canceled. Keyed off type, never state names. */
 export const OPEN_STATES = { type: { nin: ["completed", "canceled"] } };
 
-export function listDocument(withAssignee: boolean): string {
+export function listDocument(withAssignee: boolean, extras: ReadonlySet<string> = new Set()): string {
+  // parent/project/url are cheap objects. labels and inverseRelations are
+  // capped so a 50-row page stays well under the 10,000 point query cap.
+  // Both carry pageInfo so a truncated nested page cannot look exact.
+  const extra = [
+    extras.has("url") ? " url" : "",
+    extras.has("parent") ? " parent { identifier }" : "",
+    extras.has("project") ? " project { name }" : "",
+    extras.has("labels")
+      ? ` labels(first: ${LIST_LABEL_PAGE}) { nodes { name parent { name } } pageInfo { hasNextPage } }`
+      : "",
+    extras.has("blockers")
+      ? ` inverseRelations(first: ${LIST_BLOCKER_PAGE}) { nodes { type } pageInfo { hasNextPage } }`
+      : "",
+  ].join("");
+
   return `query LinIssueList($filter: IssueFilter, $first: Int!, $after: String, $sort: [IssueSortInput!], $archived: Boolean) {
   issues(filter: $filter, first: $first, after: $after, sort: $sort, includeArchived: $archived) {
-    nodes { identifier title state { name }${withAssignee ? " assignee { displayName }" : ""} priority updatedAt }
+    nodes { identifier title state { name }${withAssignee ? " assignee { displayName }" : ""} priority updatedAt${extra} }
     pageInfo { hasNextPage endCursor }
   }
 }`;
+}
+
+/** Label groups read as `group/label`, the form `--label` accepts back. */
+function labelName(label: { name: string; parent: { name: string } | null }): string {
+  return label.parent ? `${label.parent.name}/${label.name}` : label.name;
+}
+
+/** `…` marks a truncated label page so a capped list cannot look complete. */
+function labelCell(labels: IssueListNode["labels"]): string[] {
+  const names = labels?.nodes.map(labelName) ?? [];
+  if (labels?.pageInfo?.hasNextPage === true) names.push("…");
+  return names;
+}
+
+/**
+ * inverseRelations is a mixed page (blocks, related, …). An exact count from a
+ * capped page would silently undercount, so a truncated page prints `N+`.
+ */
+export function blockerCell(relations: IssueListNode["inverseRelations"]): number | string {
+  const count = relations?.nodes.filter((relation) => relation.type === "blocks").length ?? 0;
+  return relations?.pageInfo?.hasNextPage === true ? `${count}+` : count;
 }
 
 export function listRows(nodes: readonly IssueListNode[]): Row[] {
@@ -248,6 +311,11 @@ export function listRows(nodes: readonly IssueListNode[]): Row[] {
     assignee: node.assignee?.displayName,
     priority: node.priority,
     updated: node.updatedAt,
+    parent: node.parent?.identifier,
+    project: node.project?.name,
+    labels: labelCell(node.labels),
+    blockers: blockerCell(node.inverseRelations),
+    url: node.url,
   }));
 }
 
@@ -292,6 +360,9 @@ export const listCommand = defineCommand({
   name: "issue list",
   group: "issue",
   summary: "list issues in a team, filtered by assignee, state, label, project or cycle",
+  allPages: true,
+  fields: ISSUE_COLUMNS,
+  extra: ISSUE_OPTIONAL_FIELDS,
   flags: {
     mine: { type: "boolean", doc: "only issues assigned to me" },
     assignee: { type: "string", valueHint: "name", doc: "only issues assigned to this user" },
@@ -318,6 +389,9 @@ export const listCommand = defineCommand({
   async run({ flags, config }) {
     const options = resolveOptions(flags);
     const mine = flagBool(flags, "mine");
+    const defaults = mine ? MINE_COLUMNS : ISSUE_COLUMNS;
+    const columns = selectColumns(defaults, ISSUE_OPTIONAL_FIELDS);
+    const extras = new Set(ISSUE_OPTIONAL_FIELDS.filter((field) => columns.includes(field)));
     const assigneeRef = flagString(flags, "assignee");
     const projectRef = flagString(flags, "project");
     const scoped = mine || assigneeRef !== undefined || projectRef !== undefined;
@@ -365,16 +439,25 @@ export const listCommand = defineCommand({
     if (createdSince !== undefined) filter["createdAt"] = { gte: createdSince };
 
     const first = limitOf(config);
-    const data = await gql<IssueListResponse>(listDocument(!mine), {
-      filter,
-      first,
-      after: flagString(flags, "after") ?? null,
-      sort: sortInput(flags),
-      archived,
-    });
+    const after = flagString(flags, "after") ?? null;
+    const page = await collectPages(
+      async (cursor) => {
+        const data = await gql<IssueListResponse>(listDocument(!mine, extras), {
+          filter,
+          first,
+          after: cursor,
+          sort: sortInput(flags),
+          archived,
+        });
+        return data.issues;
+      },
+      after,
+      flagBool(flags, "all-pages"),
+    );
 
-    table("issues", listRows(data.issues.nodes), mine ? MINE_COLUMNS : ISSUE_COLUMNS, {
-      more: morePages(data.issues.pageInfo, undefined, (cursor) => continuation("issue list", [], flags, cursor)),
+    table("issues", listRows(page.nodes), mine ? MINE_COLUMNS : ISSUE_COLUMNS, {
+      extra: ISSUE_OPTIONAL_FIELDS,
+      more: morePages(page.pageInfo, undefined, (cursor) => continuation("issue list", [], flags, cursor)),
     });
   },
 });
@@ -439,11 +522,6 @@ function commentCount(value: string | undefined): number {
     );
   }
   return Math.min(parsed, ALL_COMMENTS);
-}
-
-/** Label groups read as `group/label`, the form `--label` accepts back. */
-function labelName(label: { name: string; parent: { name: string } | null }): string {
-  return label.parent ? `${label.parent.name}/${label.name}` : label.name;
 }
 
 export const viewCommand = defineCommand({

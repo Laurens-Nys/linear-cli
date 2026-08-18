@@ -80,7 +80,9 @@ describe("bash", () => {
   test("offers a command's own flags plus the globals", () => {
     expect(script).toContain("'widget list') words='--mine --label' ;;");
     expect(script).toContain("'ping') words='--title -t' ;;");
-    expect(script).toContain('words="$words --limit -n --after --team --quiet -q');
+    expect(script).toContain('words="$words --limit -n --after --all-pages --fields --team --quiet -q');
+    expect(script).toContain("--all-pages");
+    expect(script).toContain("--fields");
   });
 });
 
@@ -128,6 +130,8 @@ describe("fish", () => {
 
   test("declares the global flags once, unconditionally", () => {
     expect(script).toContain("complete -c lin -s n -l limit -r -d 'maximum rows to return (default 50)'");
+    expect(script).toContain("-l all-pages");
+    expect(script).toContain("-l fields");
   });
 });
 

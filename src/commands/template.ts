@@ -26,6 +26,7 @@ export const templateList = defineCommand({
   name: "template list",
   group: "template",
   summary: "list issue, project, and document templates",
+  fields: ["id", "name", "type"],
   examples: ["lin template list", "lin template list --team ENG"],
   async run({ flags, config }) {
     const team = config.team ? await resolveTeam(config.team, noCache(flags)) : null;

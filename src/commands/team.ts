@@ -43,6 +43,7 @@ export const teamList = defineCommand({
   name: "team list",
   group: "team",
   summary: "list the workspace's teams",
+  fields: ["key", "name", "cycles", "issues"],
   examples: ["lin team list"],
   async run({ config }) {
     const data = await gql<ListResponse>(LIST_QUERY, { first: config.limit ?? DEFAULT_LIMIT });
@@ -129,6 +130,7 @@ export const teamStates = defineCommand({
   name: "team states",
   group: "team",
   summary: "list a team's workflow states, in board order",
+  fields: STATE_COLUMNS,
   args: [{ name: "key", doc: "team key, defaulting to the configured team" }],
   examples: ["lin team states ENG"],
   async run({ args, flags, config }) {

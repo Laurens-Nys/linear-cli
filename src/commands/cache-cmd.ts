@@ -45,7 +45,7 @@ defineCommand({
 defineCommand({
   name: "cache warm",
   group: "meta",
-  summary: "refetch teams, states, labels, users, projects, and templates",
+  summary: "refetch every vocabulary page: teams, states, labels, users, projects, and templates",
   examples: ["lin cache warm"],
   async run() {
     const meta = await warm();
