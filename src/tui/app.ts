@@ -20,6 +20,8 @@ import {
   type TuiIssue,
   type TuiIssueQuery,
   TuiIssueStore,
+  formatTuiCount,
+  isTuiAbortError,
   moveTuiIssue,
   TUI_SORT_LABELS,
   TUI_SORT_SHORT,
@@ -168,6 +170,7 @@ export class TuiApp {
   private detailSource = "Loading…";
   private stopped = false;
   private generation = 0;
+  private detailGeneration = 0;
   private selectedTeamId: string | undefined;
   private selectedProjectId: string | undefined;
   private sort: TuiSort = "updated";
@@ -186,6 +189,7 @@ export class TuiApp {
   private dragHint = "";
   private moveNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   private lastMarkdownWidth = 0;
+  private preserveDetailScroll = false;
   private lastContentFocus?: Renderable;
   private picker?: {
     kind: PickerKind;
@@ -359,11 +363,10 @@ export class TuiApp {
     const query = { ...this.currentQuery() };
     const boardKey = this.layout === "board" ? this.boardScopeKey(query) : undefined;
     if (this.layout === "board" && !this.selectedTeamId) {
+      this.store.abort();
       this.board.setBoard([], []);
       this.board.setInteractive(false);
       this.boardQueryKey = undefined;
-      this.countText.content = "Choose team";
-      this.countText.fg = C.muted;
       this.updateHeader();
       return;
     }
@@ -373,12 +376,12 @@ export class TuiApp {
     }
     this.store.loading();
     this.errorMessage = "";
-    this.countText.content = "Refreshing…";
-    this.countText.fg = C.secondary;
+    this.updateHeader();
+    this.updateFooter();
     try {
-      const issues = await this.store.load(query);
+      const page = await this.store.load(query);
       if (generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
-      const state = this.store.ready(issues);
+      const state = this.store.ready(page);
       const currentId = (this.layout === "board" ? this.board.getSelectedIssue() : this.list.getSelectedIssue())?.identifier;
       const selectedId = currentId && state.issues.some((issue) => issue.identifier === currentId)
         ? currentId
@@ -388,33 +391,45 @@ export class TuiApp {
         this.boardQueryKey = boardKey;
         this.board.setInteractive(true);
       }
-      const openIssue = this.detailIssueId
-        ? state.issues.find((issue) => issue.identifier === this.detailIssueId)
-        : undefined;
-      this.showIssue(openIssue ?? (this.layout === "board" ? this.board.getSelectedIssue() : this.list.getSelectedIssue()));
       if (state.issues.length === 0) {
-        this.countText.content = "0";
+        this.detailGeneration += 1;
+        this.store.abortDetail();
+        this.detailIssueId = undefined;
         this.setDetailMarkdown("No issues match this view.");
         this.detail.title = "Detail";
+        this.openChip.visible = false;
       } else {
-        this.countText.content = `${state.issues.length}`;
+        const openIssue = this.detailIssueId
+          ? state.issues.find((issue) => issue.identifier === this.detailIssueId)
+          : undefined;
+        this.showIssue(openIssue ?? (this.layout === "board" ? this.board.getSelectedIssue() : this.list.getSelectedIssue()));
       }
-      this.countText.fg = C.muted;
       this.updateHeader();
+      this.updateFooter();
     } catch (error) {
-      if (generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
+      if (isTuiAbortError(error) || generation !== this.generation || this.stopped || this.renderer.isDestroyed) return;
       const state = this.store.error(error);
       const message = state.kind === "error" ? state.message : String(error);
       this.errorMessage = `Could not refresh: ${message}  ·  press r to retry`;
       this.countText.fg = C.red;
       if (this.layout === "board") this.board.setInteractive(false);
+      if (state.issues.length === 0) {
+        this.detailGeneration += 1;
+        this.store.abortDetail();
+        this.detailIssueId = undefined;
+        this.setDetailMarkdown("Could not load issues. Press r to retry.");
+        this.detail.title = "Detail";
+        this.openChip.visible = false;
+      }
+      this.updateHeader();
       this.updateFooter();
     }
   }
 
   quit(): void {
     if (this.stopped) return;
-    this.stopped = true; this.generation += 1;
+    this.stopped = true; this.generation += 1; this.detailGeneration += 1;
+    this.store.abort();
     if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
     this.options.onQuit?.();
   }
@@ -547,6 +562,7 @@ export class TuiApp {
     if (!current) return;
     const scrollSnapshot = this.board.captureScrollState();
     this.pendingMove = true;
+    this.store.abortList();
     this.generation += 1;
     if (this.moveNoticeTimer) clearTimeout(this.moveNoticeTimer);
     this.moveNoticeTimer = undefined;
@@ -763,20 +779,36 @@ export class TuiApp {
     this.openChip.visible = Boolean(this.detailIssueId) && !(this.layout === "board" && !this.selectedTeamId);
     this.searchStatus.content = searchLabel;
     this.searchStatus.visible = Boolean(this.appliedTitle) && !compact;
-    const count = this.layout === "board" && !this.selectedTeamId ? 0 : this.store.state.issues.length;
     this.tabs.visible = this.layout === "list";
     const layoutLabel = layoutChipLabel(this.layout, compact);
     this.layoutText.content = layoutLabel;
     this.layoutChip.width = layoutLabel.length;
-    this.list.title = `${TUI_VIEW_LABELS[this.view]} · ${count}`;
-    this.countText.content = this.layout === "board" && !this.selectedTeamId
-      ? "Choose team"
-      : this.store.state.kind === "loading" ? "Refreshing…" : `${count}`;
+    const count = this.countLabel();
+    this.list.title = `${TUI_VIEW_LABELS[this.view]} · ${this.listTitleCount()}`;
+    this.countText.content = count;
+    this.countText.fg = this.store.state.kind === "error" ? C.red
+      : this.store.state.kind === "loading" ? C.secondary
+      : C.muted;
   }
 
-  private setDetailMarkdown(source: string): void {
+  private countLabel(): string {
+    if (this.layout === "board" && !this.selectedTeamId) return "Choose team";
+    if (this.store.state.kind === "loading") return "Refreshing…";
+    if (this.store.state.kind === "error" && this.store.state.issues.length === 0) return "unavailable";
+    return formatTuiCount(this.store.state.issues.length, this.store.state.totalCount, this.store.state.pageInfo);
+  }
+
+  private listTitleCount(): string {
+    if (this.layout === "board" && !this.selectedTeamId) return "0";
+    if (this.store.state.kind === "error" && this.store.state.issues.length === 0) return "unavailable";
+    if (this.store.state.kind === "loading" && this.store.state.issues.length === 0) return "…";
+    return formatTuiCount(this.store.state.issues.length, this.store.state.totalCount, this.store.state.pageInfo);
+  }
+
+  private setDetailMarkdown(source: string, options?: { preserveScroll?: boolean }): void {
     this.detailSource = source;
     this.pendingDetailMarkdown = true;
+    this.preserveDetailScroll = options?.preserveScroll === true;
     this.flushDetailMarkdown();
   }
 
@@ -796,16 +828,74 @@ export class TuiApp {
     } else {
       this.detailMarkdown.clearCache();
     }
-    this.detail.scrollTo(0);
+    if (!this.preserveDetailScroll) this.detail.scrollTo(0);
+  }
+
+  private clearDetailLoadError(): void {
+    if (!this.errorMessage.startsWith("Could not load ")) return;
+    this.errorMessage = "";
+    this.updateFooter();
   }
 
   private showIssue(issue: TuiIssue | undefined): void {
     const nextId = issue?.identifier;
-    this.setDetailMarkdown(issueDetail(issue));
-    this.detail.title = issue?.url ?? nextId ?? "Detail";
-    if (nextId !== this.detailIssueId) this.detail.scrollTo(0);
+    if (!issue) {
+      this.detailGeneration += 1;
+      this.store.abortDetail();
+      this.setDetailMarkdown(issueDetail(undefined));
+      this.detail.title = "Detail";
+      this.detailIssueId = undefined;
+      this.openChip.visible = false;
+      return;
+    }
+    const sameIssue = nextId === this.detailIssueId;
+    const fresh = this.store.peekDetail(issue);
+    const cached = fresh ?? this.store.peekCachedDetail(issue);
+    if (fresh) {
+      this.detailGeneration += 1;
+      this.store.abortDetail();
+      this.clearDetailLoadError();
+      this.setDetailMarkdown(issueDetail(issue, fresh), { preserveScroll: sameIssue });
+    } else if (this.store.canLoadDetail) {
+      if (cached) {
+        this.setDetailMarkdown(issueDetail(issue, cached), { preserveScroll: sameIssue });
+      } else {
+        this.setDetailMarkdown(issueDetail(issue, "loading"), { preserveScroll: sameIssue });
+      }
+      void this.loadShownDetail(issue);
+    } else {
+      this.detailGeneration += 1;
+      this.store.abortDetail();
+      this.setDetailMarkdown(issueDetail(issue), { preserveScroll: sameIssue });
+    }
+    this.detail.title = issue.url ?? nextId ?? "Detail";
+    if (!sameIssue) this.detail.scrollTo(0);
     this.detailIssueId = nextId;
     this.openChip.visible = Boolean(nextId);
+  }
+
+  private async loadShownDetail(issue: TuiIssue): Promise<void> {
+    this.clearDetailLoadError();
+    const generation = ++this.detailGeneration;
+    try {
+      const detail = await this.store.loadDetail(issue);
+      if (generation !== this.detailGeneration || this.stopped || this.renderer.isDestroyed) return;
+      if (this.detailIssueId !== issue.identifier) return;
+      const current = this.store.state.issues.find((item) => item.id === issue.id) ?? issue;
+      this.clearDetailLoadError();
+      this.setDetailMarkdown(issueDetail(current, detail), { preserveScroll: true });
+    } catch (error) {
+      if (isTuiAbortError(error) || generation !== this.detailGeneration || this.stopped || this.renderer.isDestroyed) {
+        return;
+      }
+      if (this.detailIssueId !== issue.identifier) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.errorMessage = `Could not load ${issue.identifier}: ${message}`;
+      if (!this.store.peekCachedDetail(issue)) {
+        this.setDetailMarkdown(issueDetail(issue, { error: message }));
+      }
+      this.updateFooter();
+    }
   }
 
   private shownIssue(): TuiIssue | undefined {

@@ -7,8 +7,10 @@ import {
   type MarkdownOptions,
 } from "@opentui/core";
 import { renderMermaidASCII } from "beautiful-mermaid";
-import type { TuiIssue } from "./data.ts";
+import { sortTuiComments, type TuiComment, type TuiIssue, type TuiIssueDetail } from "./data.ts";
 import { GROK_NIGHT as C } from "./theme.ts";
+
+export type TuiDetailView = TuiIssueDetail | "loading" | { error: string };
 
 const PRIORITIES = ["No priority", "Urgent", "High", "Medium", "Low"] as const;
 
@@ -108,7 +110,24 @@ export function issueMarkdownRenderNode(renderer: CliRenderer): MarkdownOptions[
   return createMarkdownCodeBlockRenderer({ mermaid: mermaidFenceRenderer(renderer) });
 }
 
-export function issueDetail(issue: TuiIssue | undefined): string {
+function commentAuthor(comment: TuiComment): string {
+  return comment.user?.displayName ?? comment.botActor?.name ?? "Unknown";
+}
+
+function commentsMarkdown(comments: readonly TuiComment[]): string {
+  if (comments.length === 0) return "*No comments.*";
+  return comments.map((comment) => [
+    `**${commentAuthor(comment)}** · ${date(comment.createdAt)}`,
+    "",
+    comment.body.trim() || "*Empty comment.*",
+  ].join("\n")).join("\n\n");
+}
+
+function isDetailError(detail: TuiDetailView | undefined): detail is { error: string } {
+  return typeof detail === "object" && detail !== null && "error" in detail && !("description" in detail);
+}
+
+export function issueDetail(issue: TuiIssue | undefined, detail?: TuiDetailView): string {
   if (!issue) return "Select an issue to view its details.";
   const facts = [
     `**${issue.identifier}** · ${issue.state.name} · ${issue.team.name} (${issue.team.key})`,
@@ -118,6 +137,18 @@ export function issueDetail(issue: TuiIssue | undefined): string {
     `Updated: ${date(issue.updatedAt)}`,
     issue.labels.nodes.length ? `Labels: ${issue.labels.nodes.map((label) => label.name).join(", ")}` : "",
   ].filter(Boolean);
+  let body: string;
+  let comments: string[] = [];
+  if (detail === "loading") {
+    body = "Loading description…";
+  } else if (isDetailError(detail)) {
+    body = `Could not load description.\n\n${detail.error}\n\nPress r to retry.`;
+  } else if (detail) {
+    body = detail.description?.trim() || "*No description.*";
+    comments = ["", "## Recent comments", "", commentsMarkdown(sortTuiComments(detail.comments))];
+  } else {
+    body = "*No description.*";
+  }
   return [
     `# ${issue.title}`,
     "",
@@ -125,6 +156,7 @@ export function issueDetail(issue: TuiIssue | undefined): string {
     "",
     "---",
     "",
-    issue.description?.trim() || "*No description.*",
+    body,
+    ...comments,
   ].join("\n");
 }

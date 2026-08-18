@@ -8,22 +8,41 @@ import { isRemoteSession, issueOpenUrl, linearAppUrl, openCommand } from "../src
 import { groupIssuesByState, statusPresentation } from "../src/tui/issue-list.ts";
 import { issueDetail, renderMermaidForWidth } from "../src/tui/markdown.ts";
 import {
-  loadTuiIssues, moveTuiIssue, TuiIssueStore, tuiIssueVariables, tuiStateFilter, TUI_SORTS,
-  type TuiIssue, type TuiIssueQuery,
+  asTuiIssuePage, formatTuiCount, isTuiAbortError, loadTuiIssueDetail, loadTuiIssues, moveTuiIssue,
+  sortTuiComments, TuiIssueStore, tuiIssueVariables, tuiStateFilter, TUI_ISSUE_DETAIL_DOCUMENT,
+  TUI_ISSUES_DOCUMENT, TUI_SORTS, type TuiIssue, type TuiIssueDetail, type TuiIssueQuery,
 } from "../src/tui/data.ts";
 import { runTui } from "../src/tui/run.ts";
 import { GROK_NIGHT } from "../src/tui/theme.ts";
 import { mock, sandbox, type Mock, type Sandbox } from "./harness.ts";
 
 const issues: TuiIssue[] = [
-  { id: "issue-eng-42", identifier: "ENG-42", title: "Fix login redirect", description: "Users bounce.", priority: 2,
+  { id: "issue-eng-42", identifier: "ENG-42", title: "Fix login redirect", priority: 2,
     updatedAt: "2026-08-12T10:00:00Z", dueDate: null, url: "https://linear.app/x/ENG-42",
     state: { id: "st-doing", name: "In Progress", color: "#e0af68", type: "started" }, team: { key: "ENG", name: "Engineering" },
     project: { name: "Reliability" }, labels: { nodes: [{ name: "Bug" }] } },
-  { id: "issue-app-4", identifier: "APP-4", title: "Rotate webhook secrets", description: null, priority: 3,
+  { id: "issue-app-4", identifier: "APP-4", title: "Rotate webhook secrets", priority: 3,
     updatedAt: "2026-08-11T10:00:00Z", url: "https://linear.app/x/APP-4",
     state: { id: "st-todo", name: "Todo", color: "#a8a8a8", type: "unstarted" }, team: { key: "APP", name: "Applications" }, project: null, labels: { nodes: [] } },
 ];
+const details: Record<string, TuiIssueDetail> = {
+  "issue-eng-42": {
+    description: "Users bounce.", comments: [], updatedAt: "2026-08-12T10:00:00Z",
+  },
+  "issue-app-4": {
+    description: null, comments: [], updatedAt: "2026-08-11T10:00:00Z",
+  },
+};
+const richDescription = "## Context\n\nUsers bounce.\n\n- stale cookie\n\n```mermaid\ngraph LR\n  A --> B\n```\n";
+
+function detailLoader(id: string, extra: Partial<TuiIssueDetail> = {}): TuiIssueDetail {
+  const issue = issues.find((item) => item.id === id);
+  return {
+    description: extra.description ?? details[id]?.description ?? null,
+    comments: extra.comments ?? details[id]?.comments ?? [],
+    updatedAt: extra.updatedAt ?? issue?.updatedAt ?? "",
+  };
+}
 
 const meta: Meta = {
   fetchedAt: new Date().toISOString(), keyFingerprint: "x", workspace: { urlKey: "acme", name: "Acme" },
@@ -44,7 +63,18 @@ const meta: Meta = {
 };
 const baseQuery: TuiIssueQuery = { limit: 25, sort: "updated", view: "all" };
 let box: Sandbox; let net: Mock;
-beforeEach(() => { box = sandbox(); net = mock([{ match: "LinTuiIssues", data: { issues: { nodes: issues } } }]); });
+beforeEach(() => {
+  box = sandbox();
+  net = mock([
+    { match: "LinTuiIssues", data: { issues: {
+      nodes: issues, totalCount: issues.length, pageInfo: { hasNextPage: false, endCursor: null },
+    } } },
+    { match: "LinTuiIssueDetail", data: { issue: {
+      id: "issue-eng-42", identifier: "ENG-42", updatedAt: "2026-08-12T10:00:00Z",
+      description: "Users bounce.", comments: { nodes: [] },
+    } } },
+  ]);
+});
 afterEach(async () => { net.restore(); box.cleanup(); await Bun.sleep(25); });
 
 function appOptions(onQuit?: () => void, extras: {
@@ -72,8 +102,14 @@ function deferred<T>() {
 
 describe("TUI issue data", () => {
   test("Mine/Open stay while team, project, and title compose", async () => {
-    await loadTuiIssues({ limit: 25, teamId: "team-eng", projectId: "project-rel", title: " login ", sort: "created", view: "all" });
+    const page = await loadTuiIssues({ limit: 25, teamId: "team-eng", projectId: "project-rel", title: " login ", sort: "created", view: "all" });
+    expect(page.totalCount).toBe(2);
+    expect(page.pageInfo).toEqual({ hasNextPage: false, endCursor: null });
     expect(net.calls[0]?.document).toContain("state { id name color type }");
+    expect(net.calls[0]?.document).toContain("totalCount");
+    expect(net.calls[0]?.document).toContain("pageInfo { hasNextPage endCursor }");
+    expect(net.calls[0]?.document).not.toContain("description");
+    expect(net.calls[0]?.document).not.toContain("comments");
     expect(net.calls[0]?.variables).toEqual({
       first: 25,
       filter: {
@@ -130,6 +166,154 @@ describe("TUI issue data", () => {
       created: { createdAt: { order: "Descending" } },
       priority: { priority: { order: "Ascending" } },
     });
+  });
+
+  test("the list query is slim and the detail query is named and lazy", () => {
+    expect(TUI_ISSUES_DOCUMENT).toContain("query LinTuiIssues");
+    expect(TUI_ISSUES_DOCUMENT).toContain("totalCount");
+    expect(TUI_ISSUES_DOCUMENT).not.toMatch(/description/);
+    expect(TUI_ISSUES_DOCUMENT).not.toMatch(/comments/);
+    expect(TUI_ISSUE_DETAIL_DOCUMENT).toContain("query LinTuiIssueDetail");
+    expect(TUI_ISSUE_DETAIL_DOCUMENT).toContain("description");
+    expect(TUI_ISSUE_DETAIL_DOCUMENT).toContain("comments(last: 3)");
+  });
+
+  test("formatTuiCount names exact complete and bounded pages", () => {
+    expect(formatTuiCount(23, 23, { hasNextPage: false, endCursor: null })).toBe("23");
+    expect(formatTuiCount(0, 0, { hasNextPage: false, endCursor: null })).toBe("0");
+    expect(formatTuiCount(50, 123, { hasNextPage: true, endCursor: "c1" })).toBe("50 of 123");
+    expect(formatTuiCount(50, 50, { hasNextPage: true, endCursor: "c1" })).toBe("50+");
+    expect(formatTuiCount(50, 49, { hasNextPage: true, endCursor: "c1" })).toBe("50+");
+    expect(asTuiIssuePage(issues)).toEqual({
+      nodes: issues, totalCount: 2, pageInfo: { hasNextPage: false, endCursor: null },
+    });
+  });
+
+  test("sortTuiComments is oldest-first and breaks ties by id", () => {
+    expect(sortTuiComments([
+      { id: "c2", createdAt: "2026-08-11T10:00:00Z", body: "Shipped.", user: null, botActor: { name: "Linear" } },
+      { id: "c1", createdAt: "2026-08-10T10:00:00Z", body: "Looks good.", user: { displayName: "Casey" } },
+      { id: "c0", createdAt: "2026-08-10T10:00:00Z", body: "Earlier.", user: { displayName: "Avery" } },
+    ]).map((comment) => comment.id)).toEqual(["c0", "c1", "c2"]);
+  });
+
+  test("detail cache hits until updatedAt changes", async () => {
+    let fetches = 0;
+    const store = new TuiIssueStore(async () => issues, async (id) => {
+      fetches += 1;
+      return detailLoader(id, { description: `body-${fetches}` });
+    });
+    const first = await store.loadDetail(issues[0]!);
+    const cached = await store.loadDetail(issues[0]!);
+    expect(fetches).toBe(1);
+    expect(cached).toEqual(first);
+    expect(first.description).toBe("body-1");
+    const next = await store.loadDetail({ ...issues[0]!, updatedAt: "2026-09-01T00:00:00Z" });
+    expect(fetches).toBe(2);
+    expect(next.description).toBe("body-2");
+  });
+
+  test("a newer detail request cancels the stale one", async () => {
+    const first = deferred<TuiIssueDetail>();
+    const store = new TuiIssueStore(async () => issues, async (id) => {
+      if (id === issues[0]!.id) return first.promise;
+      return detailLoader(id, { description: "second" });
+    });
+    let cancelled: unknown;
+    const pending = store.loadDetail(issues[0]!).then(
+      () => { throw new Error("stale detail should have been cancelled"); },
+      (error) => { cancelled = error; },
+    );
+    await expect(store.loadDetail(issues[1]!)).resolves.toMatchObject({ description: "second" });
+    first.resolve(detailLoader(issues[0]!.id, { description: "first" }));
+    await pending;
+    expect(isTuiAbortError(cancelled)).toBe(true);
+    expect(store.peekDetail(issues[0]!)).toBeUndefined();
+    expect(store.peekDetail(issues[1]!)?.description).toBe("second");
+  });
+
+  test("peekCachedDetail survives updatedAt changes until invalidateDetail", async () => {
+    let fetches = 0;
+    const store = new TuiIssueStore(async () => issues, async (id) => {
+      fetches += 1;
+      return detailLoader(id, { description: `body-${fetches}` });
+    });
+    await store.loadDetail(issues[0]!);
+    const later = { ...issues[0]!, updatedAt: "2026-09-01T00:00:00Z" };
+    expect(store.peekDetail(later)).toBeUndefined();
+    expect(store.peekCachedDetail(later)?.description).toBe("body-1");
+    store.invalidateDetail(issues[0]!.id);
+    expect(store.peekCachedDetail(later)).toBeUndefined();
+    await store.loadDetail(later);
+    expect(fetches).toBe(2);
+    expect(store.peekDetail(later)?.description).toBe("body-2");
+  });
+
+  test("abortList cancels the list request and leaves detail in flight", async () => {
+    const list = deferred<TuiIssue[]>();
+    const detail = deferred<TuiIssueDetail>();
+    let listSignal: AbortSignal | undefined;
+    let detailSignal: AbortSignal | undefined;
+    const store = new TuiIssueStore(
+      async (_query, signal) => { listSignal = signal; return list.promise; },
+      async (_id, signal) => { detailSignal = signal; return detail.promise; },
+    );
+    let cancelled: unknown;
+    const pendingList = store.load(baseQuery).then(
+      () => { throw new Error("list should have been cancelled"); },
+      (error) => { cancelled = error; },
+    );
+    const pendingDetail = store.loadDetail(issues[0]!);
+    await Promise.resolve();
+    store.abortList();
+    expect(listSignal?.aborted).toBe(true);
+    expect(detailSignal?.aborted).toBe(false);
+    detail.resolve(detailLoader(issues[0]!.id, { description: "kept" }));
+    await expect(pendingDetail).resolves.toMatchObject({ description: "kept" });
+    list.resolve(issues);
+    await pendingList;
+    expect(isTuiAbortError(cancelled)).toBe(true);
+  });
+
+  test("a newer list request cancels the stale one", async () => {
+    const first = deferred<TuiIssue[]>();
+    let loads = 0;
+    let firstSignal: AbortSignal | undefined;
+    const store = new TuiIssueStore(async (_query, signal) => {
+      loads += 1;
+      if (loads === 1) {
+        firstSignal = signal;
+        return first.promise;
+      }
+      return [issues[1]!];
+    });
+    let cancelled: unknown;
+    const pending = store.load(baseQuery).then(
+      () => { throw new Error("stale list should have been cancelled"); },
+      (error) => { cancelled = error; },
+    );
+    const page = await store.load({ ...baseQuery, teamId: "team-app" });
+    expect(firstSignal?.aborted).toBe(true);
+    expect(page.nodes).toEqual([issues[1]!]);
+    first.resolve([issues[0]!]);
+    await pending;
+    expect(isTuiAbortError(cancelled)).toBe(true);
+  });
+
+  test("loadTuiIssueDetail fetches description and the last comments", async () => {
+    net.restore();
+    net = mock([{ match: "LinTuiIssueDetail", data: { issue: {
+      id: "issue-eng-42", identifier: "ENG-42", updatedAt: "2026-08-12T10:00:00Z",
+      description: "Users bounce.",
+      comments: { nodes: [{ id: "c1", createdAt: "2026-08-10T10:00:00Z", body: "Looks good.", user: { displayName: "Casey" } }] },
+    } } }]);
+    await expect(loadTuiIssueDetail("issue-eng-42")).resolves.toEqual({
+      description: "Users bounce.",
+      updatedAt: "2026-08-12T10:00:00Z",
+      comments: [{ id: "c1", createdAt: "2026-08-10T10:00:00Z", body: "Looks good.", user: { displayName: "Casey" } }],
+    });
+    expect(net.calls[0]?.document).toContain("query LinTuiIssueDetail");
+    expect(net.calls[0]?.variables).toEqual({ id: "issue-eng-42" });
   });
 });
 
@@ -202,13 +386,47 @@ describe("Grok Night", () => {
 
 describe("issue detail markdown", () => {
   test("shapes the selected issue as markdown with a raw description body", () => {
-    const rendered = issueDetail(issues[0]);
+    const rendered = issueDetail(issues[0], details["issue-eng-42"]);
     expect(rendered).toContain("# Fix login redirect");
     expect(rendered).toContain("**ENG-42**");
     expect(rendered).toContain("Users bounce.");
+    expect(rendered).toContain("## Recent comments");
+    expect(rendered).toContain("*No comments.*");
     expect(rendered).not.toContain("https://linear.app/x/ENG-42");
-    expect(issueDetail(issues[1])).toContain("*No description.*");
+    expect(issueDetail(issues[1], details["issue-app-4"])).toContain("*No description.*");
+    expect(issueDetail(issues[0], "loading")).toContain("Loading description…");
     expect(issueDetail(undefined)).toBe("Select an issue to view its details.");
+  });
+
+  test("appends the last comments under the description", () => {
+    const rendered = issueDetail(issues[0], {
+      description: "Users bounce.",
+      updatedAt: issues[0]!.updatedAt,
+      comments: [
+        { id: "c2", createdAt: "2026-08-11T10:00:00Z", body: "Shipped.", user: null, botActor: { name: "Linear" } },
+        { id: "c1", createdAt: "2026-08-10T10:00:00Z", body: "Looks good.", user: { displayName: "Casey" } },
+        { id: "c0", createdAt: "2026-08-10T10:00:00Z", body: "Earlier.", user: { displayName: "Avery" } },
+      ],
+    });
+    expect(rendered).toContain("## Recent comments");
+    expect(rendered).not.toMatch(/## Comments\n/);
+    expect(rendered.indexOf("Earlier.")).toBeLessThan(rendered.indexOf("Looks good."));
+    expect(rendered.indexOf("Looks good.")).toBeLessThan(rendered.indexOf("Shipped."));
+    expect(rendered).toContain("**Avery** · 2026-08-10");
+    expect(rendered).toContain("**Casey** · 2026-08-10");
+    expect(rendered).toContain("**Linear** · 2026-08-11");
+  });
+
+  test("detail errors keep issue facts and do not invent an empty body", () => {
+    const rendered = issueDetail(issues[0], { error: "timeout" });
+    expect(rendered).toContain("# Fix login redirect");
+    expect(rendered).toContain("**ENG-42**");
+    expect(rendered).toContain("Could not load description.");
+    expect(rendered).toContain("timeout");
+    expect(rendered).toContain("Press r to retry.");
+    expect(rendered).not.toContain("*No description.*");
+    expect(rendered).not.toContain("*No comments.*");
+    expect(rendered).not.toContain("## Recent comments");
   });
 
   test("renders mermaid as unicode boxes and rejects invalid source", () => {
@@ -217,6 +435,510 @@ describe("issue detail markdown", () => {
     expect(ascii).toContain("B");
     expect(ascii).toMatch(/[┌─┐│└┘►]/);
     expect(() => renderMermaidForWidth("not a diagram", 80)).toThrow();
+  });
+});
+
+describe("TUI lazy detail, cancellation, and counts", () => {
+  test("startup fetches list then one lazy detail", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const detailIds: string[] = [];
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues, async (id) => { detailIds.push(id); return detailLoader(id); }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.list.options.length === 2 && detailIds.length === 1);
+      await setup.flush();
+      expect(detailIds).toEqual(["issue-eng-42"]);
+      expect(app.detailMarkdown.content).toContain("Users bounce.");
+      expect(app.countText.plainText).toBe("2");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("reopening unchanged detail is a cache hit", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
+    const detailIds: string[] = [];
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues, async (id) => { detailIds.push(id); return detailLoader(id); }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => detailIds.length === 1 && app.detailMarkdown.content.includes("Users bounce."));
+      const second = app.root.findDescendantById("tui-issue-row-APP-4") as import("@opentui/core").BoxRenderable;
+      await setup.mockMouse.click(second.screenX + 2, second.screenY); await setup.flush();
+      await setup.waitFor(() => detailIds.length === 2 && app.detailMarkdown.content.includes("*No description.*"));
+      const first = app.root.findDescendantById("tui-issue-row-ENG-42") as import("@opentui/core").BoxRenderable;
+      await setup.mockMouse.click(first.screenX + 2, first.screenY); await setup.flush();
+      await setup.waitFor(() => app.detailMarkdown.content.includes("Users bounce."));
+      expect(detailIds).toEqual(["issue-eng-42", "issue-app-4"]);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("a newer updatedAt invalidates cached detail", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    let loads = 0;
+    let fetches = 0;
+    const later = { ...issues[0]!, updatedAt: "2026-09-01T00:00:00Z" };
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(
+        async () => ++loads === 1 ? [issues[0]!] : [later],
+        async (id) => {
+          fetches += 1;
+          return detailLoader(id, { description: `body-${fetches}`, updatedAt: loads === 1 ? issues[0]!.updatedAt : later.updatedAt });
+        },
+      ),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => fetches === 1 && app.detailMarkdown.content.includes("body-1"));
+      await app.refresh();
+      await setup.waitFor(() => fetches === 2 && app.detailMarkdown.content.includes("body-2"));
+      expect(loads).toBe(2);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("changing selection cancels a stale detail request", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
+    const firstDetail = deferred<TuiIssueDetail>();
+    let firstSignal: AbortSignal | undefined;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues, async (id, signal) => {
+        if (id === issues[0]!.id) {
+          firstSignal = signal;
+          return firstDetail.promise;
+        }
+        return detailLoader(id, { description: "APP body" });
+      }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => firstSignal !== undefined);
+      const second = app.root.findDescendantById("tui-issue-row-APP-4") as import("@opentui/core").BoxRenderable;
+      await setup.mockMouse.click(second.screenX + 2, second.screenY);
+      await setup.waitFor(() => app.detailMarkdown.content.includes("APP body"));
+      expect(firstSignal?.aborted).toBe(true);
+      firstDetail.resolve(detailLoader(issues[0]!.id, { description: "stale" }));
+      await Promise.resolve(); await setup.flush();
+      expect(app.detailMarkdown.content).toContain("APP body");
+      expect(app.detailMarkdown.content).not.toContain("stale");
+      expect(app.footer.plainText).not.toContain("Could not load");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("changing filters cancels a stale list request", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const first = deferred<TuiIssue[]>();
+    let loads = 0;
+    let firstSignal: AbortSignal | undefined;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async (_query, signal) => {
+        loads += 1;
+        if (loads === 1) {
+          firstSignal = signal;
+          return first.promise;
+        }
+        return [issues[1]!];
+      }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => firstSignal !== undefined);
+      app.openPicker("team");
+      const picker = app.root.findDescendantById("tui-picker-list") as import("@opentui/core").SelectRenderable;
+      picker.setSelectedIndex(2); picker.selectCurrent();
+      await setup.waitFor(() => app.list.options.length === 1);
+      expect(firstSignal?.aborted).toBe(true);
+      expect(app.list.getSelectedOption()?.name).toContain("APP-4");
+      first.resolve([issues[0]!]); await Promise.resolve(); await setup.flush();
+      expect(app.list.getSelectedOption()?.name).toContain("APP-4");
+      expect(app.footer.plainText).not.toContain("Could not refresh");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("quit aborts in-flight list and detail requests", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const list = deferred<TuiIssue[]>();
+    const detail = deferred<TuiIssueDetail>();
+    let listSignal: AbortSignal | undefined;
+    let detailSignal: AbortSignal | undefined;
+    let loads = 0;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(
+        async (_query, signal) => {
+          loads += 1;
+          listSignal = signal;
+          if (loads === 1) return issues;
+          return list.promise;
+        },
+        async (_id, signal) => {
+          detailSignal = signal;
+          return detail.promise;
+        },
+      ),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.list.options.length === 2 && detailSignal !== undefined);
+      void app.refresh();
+      await setup.waitFor(() => listSignal !== undefined && loads === 2);
+      app.quit();
+      expect(listSignal?.aborted).toBe(true);
+      expect(detailSignal?.aborted).toBe(true);
+      list.resolve(issues);
+      detail.resolve(detailLoader(issues[0]!.id));
+      await Promise.resolve(); await setup.flush();
+      expect(app.footer.plainText).not.toContain("Could not refresh");
+      expect(app.footer.plainText).not.toContain("Could not load");
+    } finally { setup.renderer.destroy(); }
+  });
+
+  test("header count is exact when complete and bounded when truncated", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    let loads = 0;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => {
+        loads += 1;
+        if (loads === 1) return { nodes: issues, totalCount: 123, pageInfo: { hasNextPage: true, endCursor: "c1" } };
+        return { nodes: [issues[0]!], totalCount: 1, pageInfo: { hasNextPage: false, endCursor: null } };
+      }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.list.options.length === 2);
+      expect(app.countText.plainText).toBe("2 of 123");
+      expect(app.list.title).toContain("2 of 123");
+      await app.refresh();
+      await setup.waitFor(() => app.list.options.length === 1);
+      expect(app.countText.plainText).toBe("1");
+      expect(app.list.title).toContain("All · 1");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("zero results do not look like a loaded page of work", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => ({ nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } })),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.countText.plainText === "0");
+      expect(app.list.options).toHaveLength(0);
+      expect(app.list.title).toContain("All · 0");
+      expect(app.detailMarkdown.content).toBe("No issues match this view.");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("an API failure keeps prior bounded data instead of implying completeness", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    let loads = 0;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => {
+        if (++loads === 1) return { nodes: issues, totalCount: 40, pageInfo: { hasNextPage: true, endCursor: "c1" } };
+        throw new Error("boom");
+      }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.list.options.length === 2 && app.countText.plainText === "2 of 40");
+      await app.refresh();
+      await setup.waitFor(() => app.footer.plainText.includes("Could not refresh"));
+      expect(app.list.options).toHaveLength(2);
+      expect(app.countText.plainText).toBe("2 of 40");
+      expect(app.list.title).toContain("2 of 40");
+      expect(app.countText.plainText).not.toBe("2");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("first list-load failure shows unavailable count and an explicit empty pane", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => { throw new Error("offline"); }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.footer.plainText.includes("Could not refresh"));
+      expect(app.list.options).toHaveLength(0);
+      expect(app.countText.plainText).toBe("unavailable");
+      expect(app.list.title).toContain("All · unavailable");
+      expect(app.countText.plainText).not.toBe("0");
+      expect(app.detailMarkdown.content).toBe("Could not load issues. Press r to retry.");
+      expect(app.detailMarkdown.content).not.toBe("Loading…");
+      expect(app.footer.plainText).toContain("press r to retry");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("header count uses a plus when truncated without a larger total", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => ({
+        nodes: issues, totalCount: 2, pageInfo: { hasNextPage: true, endCursor: "c1" },
+      })),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.list.options.length === 2);
+      expect(app.countText.plainText).toBe("2+");
+      expect(app.list.title).toContain("2+");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("detail failure keeps facts and retry then success restores the body", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    let fetches = 0;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues, async (id) => {
+        fetches += 1;
+        if (fetches === 1) throw new Error("timeout");
+        return detailLoader(id);
+      }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.footer.plainText.includes("Could not load ENG-42"));
+      expect(app.detailMarkdown.content).toContain("# Fix login redirect");
+      expect(app.detailMarkdown.content).toContain("**ENG-42**");
+      expect(app.detailMarkdown.content).toContain("Could not load description.");
+      expect(app.detailMarkdown.content).toContain("Press r to retry.");
+      expect(app.detailMarkdown.content).not.toContain("*No description.*");
+      expect(app.detailMarkdown.content).not.toContain("*No comments.*");
+      setup.mockInput.pressKey("r");
+      await setup.waitFor(() => app.detailMarkdown.content.includes("Users bounce."));
+      expect(app.footer.plainText).not.toContain("Could not load");
+      expect(app.detailMarkdown.content).toContain("## Recent comments");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("selecting another issue after a detail failure clears only that error", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues, async (id) => {
+        if (id === issues[0]!.id) throw new Error("timeout");
+        return detailLoader(id, { description: "APP body" });
+      }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.footer.plainText.includes("Could not load ENG-42"));
+      const second = app.root.findDescendantById("tui-issue-row-APP-4") as import("@opentui/core").BoxRenderable;
+      await setup.mockMouse.click(second.screenX + 2, second.screenY); await setup.flush();
+      await setup.waitFor(() => app.detailMarkdown.content.includes("APP body"));
+      expect(app.footer.plainText).not.toContain("Could not load");
+      expect(app.detailMarkdown.content).not.toContain("Could not load description.");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("an already-shown issue keeps stale detail while updatedAt refreshes", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const later = { ...issues[0]!, updatedAt: "2026-09-01T00:00:00Z" };
+    const second = deferred<TuiIssueDetail>();
+    const tall = (label: string) => `${label}\n\n${Array.from({ length: 80 }, (_, index) => `line ${index}`).join("\n")}`;
+    let loads = 0;
+    let fetches = 0;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(
+        async () => ++loads === 1 ? [issues[0]!] : [later],
+        async (id) => {
+          fetches += 1;
+          if (fetches === 1) return detailLoader(id, { description: tall("body-1") });
+          return second.promise;
+        },
+      ),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => fetches === 1 && app.detailMarkdown.content.includes("body-1"));
+      await setup.flush();
+      app.detail.scrollTop = 6;
+      expect(app.detail.scrollTop).toBeGreaterThan(0);
+      const pending = app.refresh();
+      await setup.waitFor(() => fetches === 2);
+      expect(app.detailMarkdown.content).toContain("body-1");
+      expect(app.detailMarkdown.content).not.toContain("Loading description");
+      expect(app.detail.scrollTop).toBe(6);
+      second.resolve(detailLoader(later.id, { description: tall("body-2"), updatedAt: later.updatedAt }));
+      await pending;
+      await setup.waitFor(() => app.detailMarkdown.content.includes("body-2"));
+      expect(app.detail.scrollTop).toBe(6);
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("recent comments render oldest first in the live detail pane", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => [issues[0]!], async (id) => detailLoader(id, {
+        comments: [
+          { id: "c2", createdAt: "2026-08-11T10:00:00Z", body: "Shipped.", user: null, botActor: { name: "Linear" } },
+          { id: "c1", createdAt: "2026-08-10T10:00:00Z", body: "Looks good.", user: { displayName: "Casey" } },
+        ],
+      })),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.detailMarkdown.content.includes("## Recent comments"));
+      const content = app.detailMarkdown.content;
+      expect(content).toContain("Looks good.");
+      expect(content).toContain("Shipped.");
+      expect(content.indexOf("Looks good.")).toBeLessThan(content.indexOf("Shipped."));
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("search cancels a stale list request", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const first = deferred<TuiIssue[]>();
+    let loads = 0;
+    let firstSignal: AbortSignal | undefined;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async (_query, signal) => {
+        loads += 1;
+        if (loads === 1) {
+          firstSignal = signal;
+          return first.promise;
+        }
+        return [issues[1]!];
+      }),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => firstSignal !== undefined);
+      setup.mockInput.pressKey("/"); await setup.mockInput.typeText("login"); setup.mockInput.pressEnter();
+      await setup.waitFor(() => app.list.options.length === 1);
+      expect(firstSignal?.aborted).toBe(true);
+      expect(app.list.getSelectedOption()?.name).toContain("APP-4");
+      first.resolve([issues[0]!]); await Promise.resolve(); await setup.flush();
+      expect(app.list.getSelectedOption()?.name).toContain("APP-4");
+      expect(app.footer.plainText).not.toContain("Could not refresh");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("layout change cancels a stale list request", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const first = deferred<TuiIssue[]>();
+    let loads = 0;
+    let firstSignal: AbortSignal | undefined;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async (_query, signal) => {
+        loads += 1;
+        if (loads === 1) {
+          firstSignal = signal;
+          return first.promise;
+        }
+        return [issues[0]!];
+      }),
+      { ...appOptions(), initialTeamId: "team-eng" },
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => firstSignal !== undefined);
+      setup.mockInput.pressKey("b");
+      await setup.waitFor(() => loads === 2 && app.board.visible);
+      expect(firstSignal?.aborted).toBe(true);
+      first.resolve([issues[1]!]); await Promise.resolve(); await setup.flush();
+      expect(app.board.visible).toBe(true);
+      expect(app.root.findDescendantById("tui-board-card-ENG-42")).toBeDefined();
+      expect(app.footer.plainText).not.toContain("Could not refresh");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("empty results cancel an in-flight detail request", async () => {
+    const setup = await createTestRenderer({ width: 110, height: 30 });
+    const detail = deferred<TuiIssueDetail>();
+    let loads = 0;
+    let detailSignal: AbortSignal | undefined;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(
+        async () => ++loads === 1
+          ? issues
+          : { nodes: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } },
+        async (_id, signal) => { detailSignal = signal; return detail.promise; },
+      ),
+      appOptions(),
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => detailSignal !== undefined);
+      await app.refresh();
+      await setup.waitFor(() => app.detailMarkdown.content === "No issues match this view.");
+      expect(detailSignal?.aborted).toBe(true);
+      detail.resolve(detailLoader(issues[0]!.id, { description: "stale" }));
+      await Promise.resolve(); await setup.flush();
+      expect(app.detailMarkdown.content).toBe("No issues match this view.");
+      expect(app.footer.plainText).not.toContain("Could not load");
+    } finally { app.quit(); setup.renderer.destroy(); }
+  });
+
+  test("a board mutation aborts an in-flight list request and keeps detail", async () => {
+    const setup = await createTestRenderer({ width: 140, height: 32 });
+    const list = deferred<TuiIssue[]>();
+    const move = deferred<TuiIssue["state"]>();
+    let loads = 0;
+    let listSignal: AbortSignal | undefined;
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(
+        async (_query, signal) => {
+          loads += 1;
+          if (loads <= 2) return [issues[0]!];
+          listSignal = signal;
+          return list.promise;
+        },
+        async (id) => detailLoader(id),
+      ),
+      { ...appOptions(), initialTeamId: "team-eng", moveIssue: async () => move.promise },
+    );
+    try {
+      app.start();
+      await setup.waitFor(() => app.list.options.length === 1 && app.detailMarkdown.content.includes("Users bounce."));
+      setup.mockInput.pressKey("b");
+      await setup.waitFor(() => loads === 2 && app.board.visible);
+      await setup.waitFor(() => app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
+      void app.refresh();
+      await setup.waitFor(() => listSignal !== undefined && loads === 3);
+      app.board.emit(KanbanBoardEvents.ISSUE_DROPPED, {
+        issue: issues[0]!,
+        state: { id: "st-done", name: "Done", type: "completed", position: 4, color: "#9ece6a" },
+      });
+      await setup.waitFor(() => app.footer.plainText.includes("Moving ENG-42"));
+      expect(listSignal?.aborted).toBe(true);
+      list.resolve([issues[0]!]); await Promise.resolve(); await setup.flush();
+      expect(app.footer.plainText).not.toContain("Could not refresh");
+      expect(app.detailMarkdown.content).toContain("Users bounce.");
+      move.resolve({ id: "st-done", name: "Done", color: "#9ece6a", type: "completed" });
+      await setup.waitFor(() => app.footer.plainText.includes("ENG-42 moved to Done"));
+    } finally { app.quit(); setup.renderer.destroy(); }
   });
 });
 
@@ -995,7 +1717,7 @@ describe("async continuity and lifecycle", () => {
 describe("responsive controls", () => {
   test("Enter opens an issue and Escape returns to the list", async () => {
     const setup = await createTestRenderer({ width: 110, height: 30 });
-    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues, async (id) => detailLoader(id)), appOptions());
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       expect(app.list.visible).toBe(true); expect(app.detail.visible).toBe(true);
@@ -1044,12 +1766,13 @@ describe("responsive controls", () => {
   });
 
   test("detail pane renders markdown headings, lists, and mermaid ASCII", async () => {
-    const rich: TuiIssue = {
-      ...issues[0]!,
-      description: "## Context\n\nUsers bounce.\n\n- stale cookie\n\n```mermaid\ngraph LR\n  A --> B\n```\n",
-    };
+    const rich = issues[0]!;
     const setup = await createTestRenderer({ width: 110, height: 30 });
-    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => [rich]), appOptions());
+    const app = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => [rich], async () => detailLoader(rich.id, { description: richDescription })),
+      appOptions(),
+    );
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
       setup.mockInput.pressEnter();
@@ -1082,7 +1805,7 @@ describe("responsive controls", () => {
 
   test("narrow tabs switch between one visible pane at a time", async () => {
     const setup = await createTestRenderer({ width: 60, height: 28, useMouse: true });
-    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
+    const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues, async (id) => detailLoader(id)), appOptions());
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       let frame = setup.captureCharFrame();

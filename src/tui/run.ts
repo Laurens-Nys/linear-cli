@@ -2,7 +2,10 @@ import { CliRenderEvents, createCliRenderer, type CliRenderer, type CliRendererC
 import { isFresh, load as loadMeta, readCached, type Meta } from "../cache.ts";
 import { EXIT, LinError } from "../out.ts";
 import { TuiApp } from "./app.ts";
-import { loadTuiIssues, TuiIssueStore, type TuiIssueQuery } from "./data.ts";
+import {
+  loadTuiIssueDetail, loadTuiIssues, TuiIssueStore,
+  type TuiIssue, type TuiIssueDetail, type TuiIssuePage, type TuiIssueQuery,
+} from "./data.ts";
 import { prepareNativeRenderer } from "./native.ts";
 
 export interface RunTuiConfig {
@@ -13,7 +16,8 @@ export interface RunTuiConfig {
 
 export interface RunTuiOptions {
   createRenderer?: (config: CliRendererConfig) => Promise<CliRenderer>;
-  loadIssues?: (query: TuiIssueQuery) => ReturnType<typeof loadTuiIssues>;
+  loadIssues?: (query: TuiIssueQuery, signal?: AbortSignal) => Promise<TuiIssuePage | TuiIssue[]>;
+  loadIssueDetail?: (id: string, signal?: AbortSignal) => Promise<TuiIssueDetail>;
   loadMetadata?: () => Promise<Meta>;
   refreshMetadata?: () => Promise<Meta>;
 }
@@ -88,7 +92,7 @@ export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}):
     }
     renderer.keyInput.off("keypress", pendingKeyHandler);
     const issueLoader = options.loadIssues ?? loadTuiIssues;
-    const store = new TuiIssueStore(issueLoader);
+    const store = new TuiIssueStore(issueLoader, options.loadIssueDetail ?? loadTuiIssueDetail);
     const app = new TuiApp(renderer, store, {
       limit: config.limit, meta, initialTeamId: initialTeam?.id, onQuit: finish,
     });
