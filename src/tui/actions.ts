@@ -14,10 +14,11 @@ import type { CachedState, CachedTeam, Meta } from "../cache.ts";
 import type { TuiIssue, TuiWorkflowStateType } from "./data.ts";
 import { GROK_NIGHT as C } from "./theme.ts";
 
-export type TuiActionId = "open" | "copy-id" | "copy-url" | "start" | "done" | "priority" | "comment";
+export type TuiActionId = "open" | "worktree" | "copy-id" | "copy-url" | "start" | "done" | "priority" | "comment";
 
 export type TuiActionDispatch =
   | { type: "open" }
+  | { type: "worktree" }
   | { type: "copy-id" }
   | { type: "copy-url" }
   | { type: "start" }
@@ -89,12 +90,21 @@ export function issueTeam(meta: Meta, issue: TuiIssue): CachedTeam | undefined {
   return meta.teams.find((team) => team.key === issue.team.key);
 }
 
-export function tuiIssueActions(issue: TuiIssue, team: CachedTeam | undefined): TuiActionItem[] {
+export function tuiIssueActions(
+  issue: TuiIssue,
+  team: CachedTeam | undefined,
+  options?: { worktree?: boolean },
+): TuiActionItem[] {
   const items: TuiActionItem[] = [
     { id: "open", name: "Open in Linear", dispatch: { type: "open" } },
+  ];
+  if (options?.worktree) {
+    items.push({ id: "worktree", name: "Open as worktree", dispatch: { type: "worktree" } });
+  }
+  items.push(
     { id: "copy-id", name: `Copy ${issue.identifier}`, dispatch: { type: "copy-id" } },
     { id: "copy-url", name: "Copy URL", dispatch: { type: "copy-url" } },
-  ];
+  );
   const started = firstTeamState(team, "started");
   const done = firstTeamState(team, "completed");
   if (started) items.push({ id: "start", name: `Move to ${started.name}`, dispatch: { type: "start" } });

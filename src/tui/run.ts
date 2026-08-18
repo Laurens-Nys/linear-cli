@@ -12,6 +12,8 @@ export interface RunTuiConfig {
   limit: number;
   team?: string;
   noCache?: boolean;
+  worktreeRepo?: string;
+  worktreeAgent?: string;
 }
 
 export interface RunTuiOptions {
@@ -99,6 +101,7 @@ export async function runTui(config: RunTuiConfig, options: RunTuiOptions = {}):
     const store = new TuiIssueStore(issueLoader, options.loadIssueDetail ?? loadTuiIssueDetail);
     app = new TuiApp(renderer, store, {
       limit: config.limit, meta, initialTeamId: initialTeam?.id, onQuit: finish,
+      worktreeRepo: config.worktreeRepo, worktreeAgent: config.worktreeAgent,
     });
     app.start();
     await stopped;

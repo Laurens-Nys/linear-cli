@@ -58,7 +58,7 @@ describe("the flat TOML parser", () => {
     expect(error.exitCode).toBe(EXIT.input);
     expect(error.message).toContain("/tmp/.lin.toml:2");
     expect(error.message).toContain("unknown key wide");
-    expect(error.hint).toBe("supported keys: team, limit");
+    expect(error.hint).toBe("supported keys: team, limit, worktree_repo, worktree_agent");
   });
 
   test("throws when limit is not a number", () => {
@@ -221,6 +221,37 @@ describe("precedence: flag > env > project > global", () => {
     } finally {
       box.cleanup();
     }
+  });
+
+  test("worktree keys stay unexpanded and env beats files", () => {
+    const box = withFiles();
+    try {
+      writeFileSync(join(box.project, ".lin.toml"), 'worktree_repo = "~/src/app"\nworktree_agent = "claude"\n');
+      expect(resolveConfig({}, box.project, box.env)).toMatchObject({
+        worktree_repo: "~/src/app",
+        worktree_agent: "claude",
+      });
+      const env = {
+        ...box.env,
+        LIN_WORKTREE_REPO: "~/src/other",
+        LIN_WORKTREE_AGENT: "codex",
+      };
+      expect(resolveConfig({}, box.project, env)).toMatchObject({
+        worktree_repo: "~/src/other",
+        worktree_agent: "codex",
+      });
+    } finally {
+      box.cleanup();
+    }
+  });
+
+  test("worktree keys stay strict strings and do not leak secrets on unknown keys", () => {
+    expect(expectLinError(() => parseToml("worktree_repo = true")).message).toContain("worktree_repo needs a string");
+    expect(expectLinError(() => parseToml("worktree_agent = 3")).message).toContain("worktree_agent needs a string");
+    const error = expectLinError(() => parseToml('api_key = "super-secret"', "/tmp/.lin.toml"));
+    expect(error.hint).toBe("supported keys: team, limit, worktree_repo, worktree_agent");
+    expect(error.message).toContain("unknown key api_key");
+    expect(error.message).not.toContain("super-secret");
   });
 
   test("an unreadable config file fails with its path", () => {

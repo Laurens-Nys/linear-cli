@@ -22,6 +22,12 @@ export const tuiCommand = defineCommand({
       );
     }
     const { runTui } = await import("../tui/run.ts");
-    await runTui({ limit: config.limit ?? 50, team: config.team, noCache: flagBool(flags, "no-cache") });
+    await runTui({
+      limit: config.limit ?? 50,
+      team: config.team,
+      noCache: flagBool(flags, "no-cache"),
+      worktreeRepo: config.worktree_repo,
+      worktreeAgent: config.worktree_agent,
+    });
   },
 });

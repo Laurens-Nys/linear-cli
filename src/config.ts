@@ -9,6 +9,8 @@ import { EXIT, LinError } from "./out.ts";
 export interface Config {
   team?: string | undefined;
   limit?: number | undefined;
+  worktree_repo?: string | undefined;
+  worktree_agent?: string | undefined;
 }
 
 export const DEFAULT_LIMIT = 50;
@@ -18,7 +20,15 @@ export const LIMIT_HINT = "example: --limit 20";
 
 export type TomlValue = string | number | boolean;
 
-const CONFIG_KEYS = ["team", "limit"] as const;
+const CONFIG_KEYS = ["team", "limit", "worktree_repo", "worktree_agent"] as const;
+const STRING_KEYS = ["team", "worktree_repo", "worktree_agent"] as const;
+export const CONFIG_KEYS_HINT = "supported keys: team, limit, worktree_repo, worktree_agent";
+
+function stringKeyExample(key: string): string {
+  if (key === "worktree_repo") return 'worktree_repo = "~/src/app"';
+  if (key === "worktree_agent") return 'worktree_agent = "claude"';
+  return 'team = "ENG"';
+}
 
 function displayValue(value: unknown): string {
   return typeof value === "string" ? `"${value}"` : String(value);
@@ -100,7 +110,7 @@ export function parseToml(text: string, source = "config"): Record<string, TomlV
     }
 
     if (!(CONFIG_KEYS as readonly string[]).includes(key)) {
-      failConfig(source, lineNo, `unknown key ${key}`, "supported keys: team, limit");
+      failConfig(source, lineNo, `unknown key ${key}`, CONFIG_KEYS_HINT);
     }
 
     let value = line.slice(equals + 1).trim();
@@ -113,7 +123,7 @@ export function parseToml(text: string, source = "config"): Record<string, TomlV
           source,
           lineNo,
           `unterminated string for ${key}`,
-          `close the ${quote} or use ${key} = ${key === "limit" ? "50" : '"ENG"'}`,
+          `close the ${quote} or use ${key} = ${key === "limit" ? "50" : key === "worktree_agent" ? '"claude"' : key === "worktree_repo" ? '"~/src/app"' : '"ENG"'}`,
         );
       }
       parsed = value.slice(1, close);
@@ -125,7 +135,7 @@ export function parseToml(text: string, source = "config"): Record<string, TomlV
           source,
           lineNo,
           `missing value for ${key}`,
-          `example: ${key} = ${key === "limit" ? "50" : '"ENG"'}`,
+          `example: ${key} = ${key === "limit" ? "50" : key === "worktree_agent" ? '"claude"' : key === "worktree_repo" ? '"~/src/app"' : '"ENG"'}`,
         );
       }
       if (value === "true" || value === "false") parsed = value === "true";
@@ -133,9 +143,9 @@ export function parseToml(text: string, source = "config"): Record<string, TomlV
       else parsed = value;
     }
 
-    if (key === "team") {
+    if ((STRING_KEYS as readonly string[]).includes(key)) {
       if (typeof parsed !== "string" || parsed === "") {
-        failConfig(source, lineNo, `team needs a string, got ${displayValue(parsed)}`, 'example: team = "ENG"');
+        failConfig(source, lineNo, `${key} needs a string, got ${displayValue(parsed)}`, `example: ${stringKeyExample(key)}`);
       }
       result[key] = parsed;
       continue;
@@ -190,6 +200,10 @@ function pick(source: Record<string, TomlValue> | undefined, into: Config): void
   if (typeof team === "string" && team !== "") into.team = team;
   const limit = source["limit"];
   if (typeof limit === "number" && Number.isFinite(limit)) into.limit = limit;
+  const worktreeRepo = source["worktree_repo"];
+  if (typeof worktreeRepo === "string" && worktreeRepo !== "") into.worktree_repo = worktreeRepo;
+  const worktreeAgent = source["worktree_agent"];
+  if (typeof worktreeAgent === "string" && worktreeAgent !== "") into.worktree_agent = worktreeAgent;
 }
 
 /** File layer only: global, then git root, then cwd. Later files win. */
@@ -205,8 +219,8 @@ export interface ConfigOverrides {
 }
 
 /**
- * The full chain: flags beat `LIN_TEAM`/`LIN_LIMIT`, which beat the project
- * file, which beats the global file.
+ * The full chain: flags beat `LIN_TEAM`/`LIN_LIMIT`/`LIN_WORKTREE_*`, which beat
+ * the project file, which beats the global file. Worktree keys have no flags.
  */
 export function resolveConfig(
   overrides: ConfigOverrides = {},
@@ -222,6 +236,12 @@ export function resolveConfig(
   if (envLimit && envLimit !== "") {
     config.limit = parseLimitInput(envLimit, "LIN_LIMIT");
   }
+
+  const envWorktreeRepo = env["LIN_WORKTREE_REPO"];
+  if (envWorktreeRepo && envWorktreeRepo !== "") config.worktree_repo = envWorktreeRepo;
+
+  const envWorktreeAgent = env["LIN_WORKTREE_AGENT"];
+  if (envWorktreeAgent && envWorktreeAgent !== "") config.worktree_agent = envWorktreeAgent;
 
   if (overrides.team !== undefined && overrides.team !== "") config.team = overrides.team;
   if (overrides.limit !== undefined) config.limit = parseLimit(overrides.limit, "--limit");

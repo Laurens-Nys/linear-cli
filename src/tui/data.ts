@@ -31,6 +31,7 @@ export interface TuiIssue {
   updatedAt: string;
   dueDate?: string | null;
   url: string;
+  branchName?: string | null;
   state: { id: string; name: string; color: string; type: TuiWorkflowStateType };
   team: { key: string; name: string };
   project?: { name: string } | null;
@@ -121,6 +122,7 @@ export const TUI_ISSUES_DOCUMENT = `query LinTuiIssues($first: Int!, $filter: Is
       updatedAt
       dueDate
       url
+      branchName
       state { id name color type }
       team { key name }
       project { name }

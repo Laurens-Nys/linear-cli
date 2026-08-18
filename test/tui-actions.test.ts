@@ -95,6 +95,9 @@ describe("TUI action catalog", () => {
   test("lists existing actions and omits assign-me", () => {
     const eng = tuiIssueActions(issues[0]!, issueTeam(meta, issues[0]!));
     expect(eng.map((item) => item.id)).toEqual(["open", "copy-id", "copy-url", "start", "done", "priority", "comment"]);
+    expect(tuiIssueActions(issues[0]!, issueTeam(meta, issues[0]!), { worktree: true }).map((item) => item.id)).toEqual([
+      "open", "worktree", "copy-id", "copy-url", "start", "done", "priority", "comment",
+    ]);
     expect(eng.map((item) => item.name).join(" ")).not.toMatch(/assign/i);
     expect(eng.find((item) => item.id === "start")?.name).toBe("Move to In Progress");
     expect(eng.find((item) => item.id === "done")?.name).toBe("Move to Done");

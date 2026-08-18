@@ -49,6 +49,12 @@ import { IssueListEvents, IssueListRenderable } from "./issue-list.ts";
 import { issueDetail, issueMarkdownRenderNode } from "./markdown.ts";
 import { isRemoteSession, issueOpenUrl, openExternalUrl } from "./open.ts";
 import { GROK_NIGHT as C, GROK_NIGHT_MARKDOWN } from "./theme.ts";
+import {
+  openIssueWorktree,
+  runWorktreeCommand,
+  type WorktreeCommandRunner,
+  type WorktreeOpenResult,
+} from "./worktree.ts";
 
 export { issueDetail, visibleSelectOffset };
 export type PickerKind = "team" | "project" | "sort";
@@ -72,6 +78,12 @@ export interface TuiAppOptions {
   moveNoticeDurationMs?: number;
   undoDurationMs?: number;
   backgroundRefreshMs?: number;
+  worktreeRepo?: string;
+  worktreeAgent?: string;
+  worktreeHome?: string;
+  worktreeEnv?: NodeJS.ProcessEnv;
+  runWorktreeCommand?: WorktreeCommandRunner;
+  openWorktree?: (issue: TuiIssue) => Promise<WorktreeOpenResult>;
 }
 
 function clip(value: string, length: number): string {
@@ -159,6 +171,7 @@ export class TuiApp {
   private notice = "";
   private pendingDetailMarkdown = false;
   private pendingMove = false;
+  private pendingWorktree = false;
   private boardQueryKey: string | undefined;
   private dragHint = "";
   private moveNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -337,6 +350,14 @@ export class TuiApp {
   }
 
   mount(): void { this.renderer.root.add(this.root); this.list.focus(); }
+  private isBusy(): boolean {
+    return this.pendingMove || this.pendingWorktree;
+  }
+
+  private worktreeConfigured(): boolean {
+    return Boolean(this.options.worktreeRepo || this.options.openWorktree);
+  }
+
   start(): void {
     this.mount();
     this.scheduleBackgroundRefresh();
@@ -352,7 +373,7 @@ export class TuiApp {
 
   async refresh(options?: { quiet?: boolean }): Promise<void> {
     const quiet = options?.quiet === true;
-    if (this.pendingMove) return;
+    if (this.isBusy()) return;
     if (quiet && (this.refreshInFlight || this.shouldSkipQuietRefresh())) return;
     const token = ++this.refreshToken;
     this.refreshInFlight = true;
@@ -459,7 +480,7 @@ export class TuiApp {
   }
 
   openPicker(kind: PickerKind, previousFocus?: Renderable): void {
-    if (this.pendingMove || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
+    if (this.isBusy() || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
     const primary = this.primaryPane();
     const restoreFocus: Renderable = previousFocus ?? (this.detail.focused ? this.detail : this.search.focused ? this.search : primary.focused ? primary : this.lastContentFocus ?? primary);
     this.lastContentFocus = restoreFocus;
@@ -549,7 +570,7 @@ export class TuiApp {
   }
 
   private openActionMenu(issue: TuiIssue | undefined, previousFocus: Renderable | undefined, includeIssues: boolean): void {
-    if (this.pendingMove || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
+    if (this.isBusy() || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
     const target = issue;
     if (!target) return;
     const primary = this.primaryPane();
@@ -557,7 +578,7 @@ export class TuiApp {
     this.lastContentFocus = restoreFocus;
     if (this.layout === "list") this.showIssue(target);
     const menu = new TuiActionMenu(this.renderer, this.root, target, {
-      items: tuiIssueActions(target, issueTeam(this.options.meta, target)),
+      items: tuiIssueActions(target, issueTeam(this.options.meta, target), { worktree: this.worktreeConfigured() }),
       issues: includeIssues ? this.store.state.issues : undefined,
       onCommit: (dispatch) => this.commitAction(dispatch),
       onClose: () => this.closeActions(),
@@ -606,7 +627,7 @@ export class TuiApp {
   }
 
   private toggleLayout(): void {
-    if (this.pendingMove) return;
+    if (this.isBusy()) return;
     this.layout = this.layout === "list" ? "board" : "list";
     this.listHidden = false;
     this.activePane = "issues";
@@ -622,7 +643,7 @@ export class TuiApp {
   }
 
   private async moveIssueToState(issue: TuiIssue, state: KanbanState, options?: { undo?: boolean }): Promise<void> {
-    if (this.pendingMove || issue.state.id === state.id) return;
+    if (this.isBusy() || issue.state.id === state.id) return;
     const current = this.store.state.issues.find((item) => item.id === issue.id);
     if (!current) return;
     const reversing = options?.undo === true;
@@ -702,7 +723,7 @@ export class TuiApp {
   }
 
   private canClickUndo(): boolean {
-    return this.undo !== undefined && this.notice.includes("u undo") && !this.pendingMove;
+    return this.undo !== undefined && this.notice.includes("u undo") && !this.isBusy();
   }
 
   private clearUndoTimer(): void {
@@ -733,7 +754,7 @@ export class TuiApp {
 
   private async undoMove(): Promise<void> {
     const snapshot = this.undo;
-    if (!snapshot || this.pendingMove) return;
+    if (!snapshot || this.isBusy()) return;
     const current = this.store.state.issues.find((item) => item.id === snapshot.issue.id);
     if (!current || current.state.id !== snapshot.currentStateId) {
       this.undo = undefined;
@@ -755,7 +776,7 @@ export class TuiApp {
   }
 
   private shouldSkipQuietRefresh(): boolean {
-    return this.pendingMove
+    return this.isBusy()
       || this.undo !== undefined
       || this.picker !== undefined
       || this.actions !== undefined
@@ -863,7 +884,7 @@ export class TuiApp {
   }
 
   private setView(view: TuiView): void {
-    if (this.pendingMove) return;
+    if (this.isBusy()) return;
     if (this.view === view) {
       this.activatePane("issues");
       return;
@@ -885,7 +906,7 @@ export class TuiApp {
   }
 
   private openSearch(previousFocus?: Renderable): void {
-    if (this.pendingMove || this.picker || this.actions || this.comment) return;
+    if (this.isBusy() || this.picker || this.actions || this.comment) return;
     const primary = this.primaryPane();
     this.lastContentFocus = previousFocus ?? (this.detail.focused ? this.detail : primary.focused ? primary : this.lastContentFocus ?? primary);
     this.search.value = this.appliedTitle;
@@ -1086,6 +1107,7 @@ export class TuiApp {
     this.closeActions();
     if (!issue) return;
     if (dispatch.type === "open") this.openInLinear(issue);
+    else if (dispatch.type === "worktree") void this.openAsWorktree(issue);
     else if (dispatch.type === "copy-id") this.copyText(issue.identifier, `copied ${issue.identifier}`);
     else if (dispatch.type === "copy-url") this.copyText(issue.url, "copied URL");
     else if (dispatch.type === "start") this.moveToType(issue, "started");
@@ -1104,6 +1126,39 @@ export class TuiApp {
       this.errorMessage = "Could not copy to this Mac";
     }
     this.updateFooter();
+  }
+
+  private async openAsWorktree(issue: TuiIssue): Promise<void> {
+    if (this.isBusy()) return;
+    this.pendingWorktree = true;
+    this.notice = `Opening worktree for ${issue.identifier}…`;
+    this.errorMessage = "";
+    this.updateFooter();
+    try {
+      const result = await (this.options.openWorktree ?? ((target) => openIssueWorktree({
+        identifier: target.identifier,
+        title: target.title,
+        branchName: target.branchName,
+        repo: this.options.worktreeRepo ?? "",
+        agent: this.options.worktreeAgent ?? "",
+        env: this.options.worktreeEnv ?? process.env,
+        home: this.options.worktreeHome,
+        run: this.options.runWorktreeCommand ?? runWorktreeCommand,
+      })))(issue);
+      if (this.stopped || this.renderer.isDestroyed) return;
+      this.errorMessage = "";
+      this.showMoveConfirmation(result.reused
+        ? `Focused existing ${issue.identifier} worktree`
+        : `Opened ${issue.identifier} as worktree`);
+    } catch (error) {
+      if (this.stopped || this.renderer.isDestroyed) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.notice = "";
+      this.errorMessage = `Could not open worktree for ${issue.identifier}: ${message}`;
+    } finally {
+      this.pendingWorktree = false;
+      if (!this.stopped && !this.renderer.isDestroyed) this.updateFooter();
+    }
   }
 
   private moveToType(issue: TuiIssue, type: TuiWorkflowStateType): void {
@@ -1125,7 +1180,7 @@ export class TuiApp {
   }
 
   private async setPriority(issue: TuiIssue, priority: number): Promise<void> {
-    if (this.pendingMove) return;
+    if (this.isBusy()) return;
     this.discardUndo();
     const current = this.store.state.issues.find((item) => item.id === issue.id);
     if (!current) return;
@@ -1166,7 +1221,7 @@ export class TuiApp {
   }
 
   private openComment(issue: TuiIssue, previousFocus?: Renderable): void {
-    if (this.pendingMove || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
+    if (this.isBusy() || this.picker || this.searchOverlay.visible || this.actions || this.comment) return;
     const primary = this.primaryPane();
     const restoreFocus: Renderable = previousFocus ?? (this.detail.focused ? this.detail : primary.focused ? primary : this.lastContentFocus ?? primary);
     this.lastContentFocus = restoreFocus;
@@ -1316,7 +1371,7 @@ export class TuiApp {
     if (key.name === "p") { key.preventDefault(); this.openPicker("project"); return; }
     if (key.name === "s") { key.preventDefault(); this.openPicker("sort"); return; }
     if (key.name === "q") { key.preventDefault(); this.quit(); return; }
-    if (key.name === "r") { key.preventDefault(); if (!this.pendingMove) void this.refresh(); return; }
+    if (key.name === "r") { key.preventDefault(); if (!this.isBusy()) void this.refresh(); return; }
     if (key.name === "o") { key.preventDefault(); this.openInLinear(); return; }
     if (key.name === "pageup") {
       key.preventDefault();
