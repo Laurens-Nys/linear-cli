@@ -18,6 +18,7 @@ import {
   herdrCommandTimeoutMs,
   herdrPaneListArgv,
   herdrPaneProcessInfoArgv,
+  herdrPaneSendKeysArgv,
   herdrPaneSendTextArgv,
   herdrWorktreeCreateArgv,
   herdrWorktreeListArgv,
@@ -166,6 +167,7 @@ function createAndStageCalls(
     herdrWorkspaceFocusArgv(workspaceId),
     herdrAgentFocusArgv(agentName),
     herdrPaneSendTextArgv(sendPaneId, worktreePrompt("ENG-42", issue.title, issue.branchName!)),
+    herdrPaneSendKeysArgv(sendPaneId),
   ];
 }
 
@@ -220,7 +222,7 @@ describe("openIssueWorktree", () => {
       if (key === "herdr worktree list") return listResult([]);
       if (key === "herdr worktree create") return mutateResult("w9", "w9:p1");
       if (key === "herdr agent start") return ok({ type: "agent_started" });
-      if (key === "herdr pane send-text") return { code: 0, stdout: "", stderr: "" };
+      if (key === "herdr pane send-text" || key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
       if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
       throw new Error(`unexpected ${argv.join(" ")}`);
     };
@@ -247,7 +249,7 @@ describe("openIssueWorktree", () => {
       if (key === "herdr agent start") {
         return ok({ type: "agent_started", agent: { name: "grok-w9", pane_id: "w9:p7", agent: "claude" } });
       }
-      if (key === "herdr pane send-text") return { code: 0, stdout: "", stderr: "" };
+      if (key === "herdr pane send-text" || key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
       if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
       throw new Error(`unexpected ${argv.join(" ")}`);
     };
@@ -260,10 +262,13 @@ describe("openIssueWorktree", () => {
       ["herdr", "workspace", "focus"],
       ["herdr", "agent", "focus"],
       ["herdr", "pane", "send-text"],
+      ["herdr", "pane", "send-keys"],
     ]);
     expect(calls[startAt + 2]).toEqual(herdrAgentFocusArgv("grok-w9"));
     expect(calls[startAt + 3]).toEqual(herdrPaneSendTextArgv("w9:p7", worktreePrompt("ENG-42", issue.title, issue.branchName!)));
+    expect(calls[startAt + 4]).toEqual(herdrPaneSendKeysArgv("w9:p7"));
     expect(calls.some((argv) => argv[1] === "agent" && argv[2] === "prompt")).toBe(false);
+    expect(calls.some((argv) => argv.includes("enter") || argv.includes("Enter"))).toBe(false);
   });
 
   test("opens a closed matching worktree instead of creating another", async () => {
@@ -278,7 +283,7 @@ describe("openIssueWorktree", () => {
       }
       if (key === "herdr worktree open") return mutateResult("w8", "w8:p1");
       if (key === "herdr agent start") return ok({});
-      if (key === "herdr pane send-text") return { code: 0, stdout: "", stderr: "" };
+      if (key === "herdr pane send-text" || key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
       if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
       throw new Error(`unexpected ${argv.join(" ")}`);
     };
@@ -291,6 +296,7 @@ describe("openIssueWorktree", () => {
       herdrWorkspaceFocusArgv("w8"),
       herdrAgentFocusArgv("eng-42"),
       herdrPaneSendTextArgv("w8:p1", worktreePrompt("ENG-42", issue.title, issue.branchName!)),
+      herdrPaneSendKeysArgv("w8:p1"),
     ]);
     expect(calls.some((argv) => argv[1] === "worktree" && argv[2] === "create")).toBe(false);
   });
@@ -312,7 +318,7 @@ describe("openIssueWorktree", () => {
       }
       if (key === "herdr worktree create") return mutateResult("w9", "w9:p1");
       if (key === "herdr agent start") return ok({});
-      if (key === "herdr pane send-text") return { code: 0, stdout: "", stderr: "" };
+      if (key === "herdr pane send-text" || key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
       if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
       throw new Error(`unexpected ${argv.join(" ")}`);
     };
@@ -381,6 +387,7 @@ describe("openIssueWorktree", () => {
       }
       if (key === "herdr workspace focus") return ok({});
       if (key === "herdr agent focus") return ok({});
+      if (key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
       throw new Error(`unexpected ${argv.join(" ")}`);
     };
     const result = await openIssueWorktree(baseInput(box, run, { repo }));
@@ -390,8 +397,11 @@ describe("openIssueWorktree", () => {
       herdrAgentListArgv(),
       herdrWorkspaceFocusArgv("w3"),
       herdrAgentFocusArgv("eng-42"),
+      herdrPaneSendKeysArgv("w3:p1"),
     ]);
     expect(calls.some((argv) => argv[2] === "create" || argv[2] === "open" || argv[2] === "start" || argv[2] === "send-text")).toBe(false);
+    expect(calls.some((argv) => argv[1] === "agent" && argv[2] === "prompt")).toBe(false);
+    expect(calls.some((argv) => argv.includes("enter") || argv.includes("Enter"))).toBe(false);
   });
 
   test("matches an existing agent by foreground_cwd and configured kind", async () => {
@@ -422,6 +432,64 @@ describe("openIssueWorktree", () => {
       herdrWorkspaceFocusArgv("w3"),
       herdrAgentFocusArgv("eng-42"),
     ]);
+    expect(calls.some((argv) => argv[2] === "send-keys" || argv[2] === "send-text")).toBe(false);
+  });
+
+  test("flushes a buffered draft on an idle reused agent without restaging", async () => {
+    const calls: string[][] = [];
+    const repo = makeRepo(box);
+    const path = worktreeCheckoutPath(repo, "ENG-42", box.dir);
+    const run: WorktreeCommandRunner = async (argv) => {
+      calls.push([...argv]);
+      const key = argvKey(argv);
+      if (key === "herdr worktree list") {
+        return listResult([{ branch: issue.branchName, path, open_workspace_id: "w3" }]);
+      }
+      if (key === "herdr agent list") {
+        return ok({ agents: [{ name: "eng-42", pane_id: "w3:p1", cwd: path, agent: "claude", agent_status: "idle", interactive_ready: true }] });
+      }
+      if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
+      if (key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
+      throw new Error(`unexpected ${argv.join(" ")}`);
+    };
+    const result = await openIssueWorktree(baseInput(box, run, { repo }));
+    expect(result.reused).toBe(true);
+    expect(calls).toEqual([
+      herdrWorktreeListArgv(repo),
+      herdrAgentListArgv(),
+      herdrWorkspaceFocusArgv("w3"),
+      herdrAgentFocusArgv("eng-42"),
+      herdrPaneSendKeysArgv("w3:p1"),
+    ]);
+    expect(calls.some((argv) => argv[2] === "send-text" || argv[2] === "start" || argv[2] === "prompt")).toBe(false);
+    expect(calls.at(-1)).toEqual(["herdr", "pane", "send-keys", "w3:p1", "left", "right"]);
+  });
+
+  test("does not poke a working reused agent or restage its prompt", async () => {
+    const calls: string[][] = [];
+    const repo = makeRepo(box);
+    const path = worktreeCheckoutPath(repo, "ENG-42", box.dir);
+    const run: WorktreeCommandRunner = async (argv) => {
+      calls.push([...argv]);
+      const key = argvKey(argv);
+      if (key === "herdr worktree list") {
+        return listResult([{ branch: issue.branchName, path, open_workspace_id: "w3" }]);
+      }
+      if (key === "herdr agent list") {
+        return ok({ agents: [{ name: "eng-42", pane_id: "w3:p1", cwd: path, agent: "claude", agent_status: "working", interactive_ready: true }] });
+      }
+      if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
+      throw new Error(`unexpected ${argv.join(" ")}`);
+    };
+    const result = await openIssueWorktree(baseInput(box, run, { repo }));
+    expect(result.reused).toBe(true);
+    expect(calls).toEqual([
+      herdrWorktreeListArgv(repo),
+      herdrAgentListArgv(),
+      herdrWorkspaceFocusArgv("w3"),
+      herdrAgentFocusArgv("eng-42"),
+    ]);
+    expect(calls.some((argv) => argv[2] === "send-keys" || argv[2] === "send-text")).toBe(false);
   });
 
   test("starts on a process-safe p1 shell when the matching worktree is open without an agent", async () => {
@@ -443,7 +511,7 @@ describe("openIssueWorktree", () => {
       }
       if (key === "herdr pane process-info") return idleShellInfo("w3:p1");
       if (key === "herdr agent start") return ok({});
-      if (key === "herdr pane send-text") return { code: 0, stdout: "", stderr: "" };
+      if (key === "herdr pane send-text" || key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
       if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
       throw new Error(`unexpected ${argv.join(" ")}`);
     };
@@ -458,6 +526,7 @@ describe("openIssueWorktree", () => {
       herdrWorkspaceFocusArgv("w3"),
       herdrAgentFocusArgv("eng-42"),
       herdrPaneSendTextArgv("w3:p1", worktreePrompt("ENG-42", issue.title, issue.branchName!)),
+      herdrPaneSendKeysArgv("w3:p1"),
     ]);
   });
 
@@ -497,7 +566,7 @@ describe("openIssueWorktree", () => {
         });
       }
       if (key === "herdr agent start") return ok({});
-      if (key === "herdr pane send-text") return { code: 0, stdout: "", stderr: "" };
+      if (key === "herdr pane send-text" || key === "herdr pane send-keys") return { code: 0, stdout: "", stderr: "" };
       if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
       throw new Error(`unexpected ${argv.join(" ")}`);
     };
@@ -512,6 +581,7 @@ describe("openIssueWorktree", () => {
       herdrWorkspaceFocusArgv("w3"),
       herdrAgentFocusArgv("eng-42"),
       herdrPaneSendTextArgv("w3:p3", worktreePrompt("ENG-42", issue.title, issue.branchName!)),
+      herdrPaneSendKeysArgv("w3:p3"),
     ]);
   });
 
@@ -587,7 +657,7 @@ describe("openIssueWorktree", () => {
     };
     await expect(openIssueWorktree(baseInput(box, run, { repo }))).rejects.toThrow(/pane is not a shell/);
     expect(calls.some((argv) => argv[1] === "worktree" && argv[2] === "remove")).toBe(false);
-    expect(calls.some((argv) => argv[2] === "send-text")).toBe(false);
+    expect(calls.some((argv) => argv[2] === "send-text" || argv[2] === "send-keys")).toBe(false);
     expect(existsSync(worktreeCheckoutPath(repo, "ENG-42", box.dir))).toBe(false);
   });
 });
@@ -597,6 +667,7 @@ describe("Herdr command timeouts", () => {
     expect(herdrCommandTimeoutMs(herdrWorktreeListArgv("/tmp"))).toBe(HERDR_QUERY_TIMEOUT_MS);
     expect(herdrCommandTimeoutMs(herdrAgentListArgv())).toBe(HERDR_QUERY_TIMEOUT_MS);
     expect(herdrCommandTimeoutMs(herdrPaneSendTextArgv("w1:p1", "hi"))).toBe(HERDR_QUERY_TIMEOUT_MS);
+    expect(herdrCommandTimeoutMs(herdrPaneSendKeysArgv("w1:p1"))).toBe(HERDR_QUERY_TIMEOUT_MS);
     expect(herdrCommandTimeoutMs(herdrWorkspaceFocusArgv("w1"))).toBe(HERDR_QUERY_TIMEOUT_MS);
     expect(herdrCommandTimeoutMs(herdrWorktreeCreateArgv("/tmp", "branch", "/tmp/x", "ENG-42"))).toBe(HERDR_MUTATE_TIMEOUT_MS);
     expect(herdrCommandTimeoutMs(herdrWorktreeOpenArgv("/tmp", "/tmp/x", "branch", "ENG-42"))).toBe(HERDR_MUTATE_TIMEOUT_MS);

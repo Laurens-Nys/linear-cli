@@ -62,6 +62,7 @@ interface HerdrAgent {
   foreground_cwd?: string;
   agent?: string;
   agent_status?: string;
+  interactive_ready?: boolean;
 }
 
 interface HerdrPane {
@@ -178,6 +179,10 @@ export function herdrAgentStartArgv(name: string, kind: string, paneId: string):
 
 export function herdrPaneSendTextArgv(paneId: string, text: string): string[] {
   return [HERDR_BIN, "pane", "send-text", paneId, text];
+}
+
+export function herdrPaneSendKeysArgv(paneId: string): string[] {
+  return [HERDR_BIN, "pane", "send-keys", paneId, "left", "right"];
 }
 
 export function herdrCommandTimeoutMs(argv: readonly string[]): number {
@@ -331,6 +336,11 @@ function findTargetWorktree(worktrees: readonly HerdrWorktree[], path: string): 
   return worktrees.find((item) => typeof item.path === "string" && samePath(item.path, path));
 }
 
+function shouldFlushBufferedPrompt(agent: HerdrAgent): boolean {
+  if (agent.agent_status === "working") return false;
+  return agent.agent_status === "idle" || agent.interactive_ready === true;
+}
+
 function agentAtCheckout(agents: readonly HerdrAgent[], path: string, kind: string): HerdrAgent | undefined {
   const matches = agents.filter((agent) => {
     const cwd = typeof agent.cwd === "string" ? agent.cwd : undefined;
@@ -425,6 +435,7 @@ async function startAndStage(
   await herdrJson(input.run, herdrWorkspaceFocusArgv(workspaceId), "herdr workspace focus");
   await herdrJson(input.run, herdrAgentFocusArgv(identity.name), "herdr agent focus");
   await herdrJson(input.run, herdrPaneSendTextArgv(identity.paneId, prompt), "herdr pane send-text");
+  await herdrJson(input.run, herdrPaneSendKeysArgv(identity.paneId), "herdr pane send-keys");
   return { paneId: identity.paneId, agentName: identity.name };
 }
 
@@ -499,6 +510,10 @@ export async function openIssueWorktree(input: OpenIssueWorktreeInput): Promise<
       const target = existingAgent.name?.trim() || existingAgent.pane_id?.trim();
       if (target) {
         await herdrJson(input.run, herdrAgentFocusArgv(target), "herdr agent focus");
+      }
+      const paneId = existingAgent.pane_id?.trim();
+      if (paneId && shouldFlushBufferedPrompt(existingAgent)) {
+        await herdrJson(input.run, herdrPaneSendKeysArgv(paneId), "herdr pane send-keys");
       }
       return {
         reused: true,
