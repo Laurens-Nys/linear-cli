@@ -151,14 +151,21 @@ function baseInput(box: Sandbox, run: WorktreeCommandRunner, extras: Partial<Par
   };
 }
 
-function createAndStageCalls(repo: string, path: string, workspaceId: string, paneId: string): string[][] {
+function createAndStageCalls(
+  repo: string,
+  path: string,
+  workspaceId: string,
+  paneId: string,
+  agentName = "eng-42",
+  sendPaneId = paneId,
+): string[][] {
   return [
     herdrWorktreeListArgv(repo),
     herdrWorktreeCreateArgv(repo, issue.branchName!, path, "ENG-42"),
     herdrAgentStartArgv("eng-42", "claude", paneId),
-    herdrPaneSendTextArgv(paneId, worktreePrompt("ENG-42", issue.title, issue.branchName!)),
     herdrWorkspaceFocusArgv(workspaceId),
-    herdrAgentFocusArgv("eng-42"),
+    herdrAgentFocusArgv(agentName),
+    herdrPaneSendTextArgv(sendPaneId, worktreePrompt("ENG-42", issue.title, issue.branchName!)),
   ];
 }
 
@@ -228,6 +235,37 @@ describe("openIssueWorktree", () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  test("focuses the started agent before staging send-text and uses Herdr's identity", async () => {
+    const calls: string[][] = [];
+    const repo = makeRepo(box);
+    const path = worktreeCheckoutPath(repo, "ENG-42", box.dir);
+    const run: WorktreeCommandRunner = async (argv) => {
+      calls.push([...argv]);
+      const key = argvKey(argv);
+      if (key === "herdr worktree list") return listResult([]);
+      if (key === "herdr worktree create") return mutateResult("w9", "w9:p1");
+      if (key === "herdr agent start") {
+        return ok({ type: "agent_started", agent: { name: "grok-w9", pane_id: "w9:p7", agent: "claude" } });
+      }
+      if (key === "herdr pane send-text") return { code: 0, stdout: "", stderr: "" };
+      if (key === "herdr workspace focus" || key === "herdr agent focus") return ok({});
+      throw new Error(`unexpected ${argv.join(" ")}`);
+    };
+    const result = await openIssueWorktree(baseInput(box, run, { repo }));
+    expect(result).toMatchObject({ created: true, reused: false, workspaceId: "w9", paneId: "w9:p7", agentName: "grok-w9" });
+    expect(calls).toEqual(createAndStageCalls(repo, path, "w9", "w9:p1", "grok-w9", "w9:p7"));
+    const startAt = calls.findIndex((argv) => argv[1] === "agent" && argv[2] === "start");
+    expect(calls.slice(startAt).map((argv) => argv.slice(0, 3))).toEqual([
+      ["herdr", "agent", "start"],
+      ["herdr", "workspace", "focus"],
+      ["herdr", "agent", "focus"],
+      ["herdr", "pane", "send-text"],
+    ]);
+    expect(calls[startAt + 2]).toEqual(herdrAgentFocusArgv("grok-w9"));
+    expect(calls[startAt + 3]).toEqual(herdrPaneSendTextArgv("w9:p7", worktreePrompt("ENG-42", issue.title, issue.branchName!)));
+    expect(calls.some((argv) => argv[1] === "agent" && argv[2] === "prompt")).toBe(false);
+  });
+
   test("opens a closed matching worktree instead of creating another", async () => {
     const calls: string[][] = [];
     const repo = makeRepo(box);
@@ -248,8 +286,12 @@ describe("openIssueWorktree", () => {
     expect(result.opened).toBe(true);
     expect(result.created).toBe(false);
     expect(calls[1]).toEqual(herdrWorktreeOpenArgv(repo, path, issue.branchName!, "ENG-42"));
-    expect(calls).toContainEqual(herdrWorkspaceFocusArgv("w8"));
-    expect(calls).toContainEqual(herdrAgentFocusArgv("eng-42"));
+    expect(calls.slice(2)).toEqual([
+      herdrAgentStartArgv("eng-42", "claude", "w8:p1"),
+      herdrWorkspaceFocusArgv("w8"),
+      herdrAgentFocusArgv("eng-42"),
+      herdrPaneSendTextArgv("w8:p1", worktreePrompt("ENG-42", issue.title, issue.branchName!)),
+    ]);
     expect(calls.some((argv) => argv[1] === "worktree" && argv[2] === "create")).toBe(false);
   });
 
@@ -410,8 +452,13 @@ describe("openIssueWorktree", () => {
     expect(calls).toContainEqual(herdrPaneListArgv("w3"));
     expect(calls).toContainEqual(herdrPaneProcessInfoArgv("w3:p1"));
     expect(calls).toContainEqual(herdrAgentStartArgv("eng-42", "claude", "w3:p1"));
-    expect(calls).toContainEqual(herdrWorkspaceFocusArgv("w3"));
-    expect(calls).toContainEqual(herdrAgentFocusArgv("eng-42"));
+    const startAt = calls.findIndex((argv) => argv[1] === "agent" && argv[2] === "start");
+    expect(calls.slice(startAt)).toEqual([
+      herdrAgentStartArgv("eng-42", "claude", "w3:p1"),
+      herdrWorkspaceFocusArgv("w3"),
+      herdrAgentFocusArgv("eng-42"),
+      herdrPaneSendTextArgv("w3:p1", worktreePrompt("ENG-42", issue.title, issue.branchName!)),
+    ]);
   });
 
   test("skips a busy foreground process and starts on the next process-safe shell", async () => {
@@ -459,7 +506,13 @@ describe("openIssueWorktree", () => {
     expect(calls).toContainEqual(herdrPaneProcessInfoArgv("w3:p1"));
     expect(calls).toContainEqual(herdrPaneProcessInfoArgv("w3:p3"));
     expect(calls).toContainEqual(herdrAgentStartArgv("eng-42", "claude", "w3:p3"));
-    expect(calls).toContainEqual(herdrAgentFocusArgv("eng-42"));
+    const startAt = calls.findIndex((argv) => argv[1] === "agent" && argv[2] === "start");
+    expect(calls.slice(startAt)).toEqual([
+      herdrAgentStartArgv("eng-42", "claude", "w3:p3"),
+      herdrWorkspaceFocusArgv("w3"),
+      herdrAgentFocusArgv("eng-42"),
+      herdrPaneSendTextArgv("w3:p3", worktreePrompt("ENG-42", issue.title, issue.branchName!)),
+    ]);
   });
 
   test("refuses to type into a pane whose foreground process is not a shell", async () => {
@@ -557,9 +610,13 @@ describe("Herdr command timeouts", () => {
 
 describe("TUI Open as worktree", () => {
   test("hides the action until worktree_repo is configured", () => {
-    expect(tuiIssueActions(issue, issueTeam(meta, issue)).some((item) => item.id === "worktree")).toBe(false);
-    expect(tuiIssueActions(issue, issueTeam(meta, issue), { worktree: true }).find((item) => item.id === "worktree")?.name)
-      .toBe("Open as worktree");
+    expect(tuiIssueActions(issue, issueTeam(meta, issue)).map((item) => item.id)).toEqual([
+      "open", "copy-id", "copy-url", "start", "done", "priority", "comment",
+    ]);
+    expect(tuiIssueActions(issue, issueTeam(meta, issue), { worktree: true }).map((item) => item.id)).toEqual([
+      "worktree", "copy-id", "copy-url", "start", "done", "priority", "comment",
+    ]);
+    expect(tuiIssueActions(issue, issueTeam(meta, issue), { worktree: true })[0]?.name).toBe("Open as worktree");
   });
 
   test("runTui config plumbing exposes Open as worktree when worktree_repo and agent are set", async () => {
@@ -583,7 +640,7 @@ describe("TUI Open as worktree", () => {
         if ((list?.options?.length ?? 0) === 2) break;
         await Bun.sleep(25);
       }
-      setup.mockInput.pressKey("a");
+      setup.mockInput.pressKey("k");
       await setup.flush();
       for (let attempt = 0; attempt < 20; attempt++) {
         const actions = root.findDescendantById("tui-actions-list") as import("@opentui/core").SelectRenderable | undefined;
@@ -630,21 +687,52 @@ describe("TUI Open as worktree", () => {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       const second = app.root.findDescendantById("tui-issue-row-APP-4") as import("@opentui/core").BoxRenderable;
       await setup.mockMouse.click(second.screenX + 2, second.screenY, MouseButtons.RIGHT); await setup.flush();
-      expect(actionNames(app)).toContain("Open as worktree");
-      expect(actionNames(app)).toContain("Open in Linear");
+      expect(actionNames(app)[0]).toBe("Open as worktree");
+      expect(actionNames(app)).not.toContain("Open in Linear");
       await setup.mockInput.typeText("worktree"); setup.mockInput.pressEnter();
       await setup.waitFor(() => opened.length === 1);
       expect(opened).toEqual(["APP-4"]);
       expect(app.footer.plainText).toContain("Opened APP-4 as worktree");
       expect(moves).toEqual([]);
 
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       expect((app.root.findDescendantById("tui-actions") as import("@opentui/core").BoxRenderable).title).toBe("APP-4");
       const input = app.root.findDescendantById("tui-actions-search") as import("@opentui/core").InputRenderable;
       input.value = "";
       await setup.mockInput.typeText("worktree"); setup.mockInput.pressEnter();
       await setup.waitFor(() => opened.length === 2);
       expect(opened).toEqual(["APP-4", "APP-4"]);
+    } finally { setup.renderer.destroy(); }
+  });
+
+  test("header Worktree chip opens the shown issue and o no longer launches Linear", async () => {
+    const opened: string[] = [];
+    const linear: string[] = [];
+    const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
+    const app = currentApp = new TuiApp(
+      setup.renderer,
+      new TuiIssueStore(async () => issues, async (id) => detailLoader(id)),
+      appOptions({
+        worktreeRepo: "~/src/app",
+        worktreeAgent: "claude",
+        openExternal: (url) => { linear.push(url); },
+        openWorktree: async (target) => {
+          opened.push(target.identifier);
+          return { reused: false, created: true, opened: false, workspaceId: "w9", path: "/tmp", branch: target.branchName ?? "" };
+        },
+      }),
+    );
+    try {
+      app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
+      expect(app.openText.plainText).toBe("Worktree ↗");
+      await setup.mockMouse.click(app.openChip.screenX, app.openChip.screenY); await setup.flush();
+      await setup.waitFor(() => opened.length === 1);
+      expect(opened).toEqual(["ENG-42"]);
+      expect(linear).toEqual([]);
+      setup.mockInput.pressKey("j"); await setup.flush();
+      setup.mockInput.pressKey("o"); await setup.flush();
+      expect(linear).toEqual([]);
+      expect(opened).toEqual(["ENG-42"]);
     } finally { setup.renderer.destroy(); }
   });
 
@@ -688,12 +776,13 @@ describe("TUI Open as worktree", () => {
     );
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       const modal = app.root.findDescendantById("tui-actions") as import("@opentui/core").BoxRenderable;
       expect(modal.width).toBeGreaterThan(40);
       expect(actionNames(app)).toEqual(expect.arrayContaining([
-        "Open in Linear", "Open as worktree", "Copy ENG-42", "Copy URL", "Set priority", "Add comment",
+        "Open as worktree", "Copy ENG-42", "Copy URL", "Set priority", "Add comment",
       ]));
+      expect(actionNames(app)).not.toContain("Open in Linear");
       await setup.mockInput.typeText("worktree"); setup.mockInput.pressEnter();
       await setup.waitFor(() => opened.length === 1);
       expect(opened).toEqual(["ENG-42"]);

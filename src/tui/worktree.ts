@@ -405,6 +405,13 @@ function rootPaneIdOf(value: unknown): string {
   return requireString(pane?.pane_id, "root pane id", "check that herdr worktree create/open returned a root pane");
 }
 
+function startedAgentIdentity(value: unknown, fallbackName: string, fallbackPaneId: string): { name: string; paneId: string } {
+  const agent = value && typeof value === "object" ? (value as { agent?: HerdrAgent }).agent : undefined;
+  const name = typeof agent?.name === "string" && agent.name.trim() !== "" ? agent.name.trim() : fallbackName;
+  const paneId = typeof agent?.pane_id === "string" && agent.pane_id.trim() !== "" ? agent.pane_id.trim() : fallbackPaneId;
+  return { name, paneId };
+}
+
 async function startAndStage(
   input: OpenIssueWorktreeInput,
   workspaceId: string,
@@ -412,11 +419,13 @@ async function startAndStage(
   slug: string,
   prompt: string,
   kind: string,
-): Promise<void> {
-  await herdrJson(input.run, herdrAgentStartArgv(slug, kind, paneId), "herdr agent start");
-  await herdrJson(input.run, herdrPaneSendTextArgv(paneId, prompt), "herdr pane send-text");
+): Promise<{ paneId: string; agentName: string }> {
+  const started = await herdrJson(input.run, herdrAgentStartArgv(slug, kind, paneId), "herdr agent start");
+  const identity = startedAgentIdentity(started, slug, paneId);
   await herdrJson(input.run, herdrWorkspaceFocusArgv(workspaceId), "herdr workspace focus");
-  await herdrJson(input.run, herdrAgentFocusArgv(slug), "herdr agent focus");
+  await herdrJson(input.run, herdrAgentFocusArgv(identity.name), "herdr agent focus");
+  await herdrJson(input.run, herdrPaneSendTextArgv(identity.paneId, prompt), "herdr pane send-text");
+  return { paneId: identity.paneId, agentName: identity.name };
 }
 
 export async function openIssueWorktree(input: OpenIssueWorktreeInput): Promise<WorktreeOpenResult> {
@@ -506,16 +515,16 @@ export async function openIssueWorktree(input: OpenIssueWorktreeInput): Promise<
       panes?: HerdrPane[];
     };
     const pane = await pickProcessSafePane(input.run, Array.isArray(listedPanes.panes) ? listedPanes.panes : []);
-    await startAndStage(input, openWorkspaceId, pane.pane_id!, slug, prompt, kind);
+    const started = await startAndStage(input, openWorkspaceId, pane.pane_id!, slug, prompt, kind);
     return {
       reused: false,
       created: false,
       opened: true,
       workspaceId: openWorkspaceId,
-      paneId: pane.pane_id,
+      paneId: started.paneId,
       path: existingPath,
       branch: existing.branch ?? branch,
-      agentName: slug,
+      agentName: started.agentName,
     };
   }
 
@@ -529,15 +538,15 @@ export async function openIssueWorktree(input: OpenIssueWorktreeInput): Promise<
   );
   const workspaceId = workspaceIdOf(mutated);
   const paneId = rootPaneIdOf(mutated);
-  await startAndStage(input, workspaceId, paneId, slug, prompt, kind);
+  const started = await startAndStage(input, workspaceId, paneId, slug, prompt, kind);
   return {
     reused: false,
     created: !existing,
     opened: Boolean(existing),
     workspaceId,
-    paneId,
+    paneId: started.paneId,
     path: existingPath,
     branch,
-    agentName: slug,
+    agentName: started.agentName,
   };
 }

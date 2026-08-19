@@ -1160,7 +1160,7 @@ describe("filters, search, mouse, and focus", () => {
     } finally { app.quit(); setup.renderer.destroy(); }
   });
 
-  test("j/k moves the highlight; click or Enter opens that issue", async () => {
+  test("j and up move the highlight; k opens the palette instead of moving up", async () => {
     const setup = await createTestRenderer({ width: 110, height: 30, useMouse: true });
     const app = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues), appOptions());
     try {
@@ -1174,9 +1174,13 @@ describe("filters, search, mouse, and focus", () => {
       await setup.flush();
       expect(app.detail.title).toBe("https://linear.app/x/APP-4");
       expect(app.list.visible).toBe(true);
-      setup.mockInput.pressKey("k"); await setup.flush();
+      setup.mockInput.pressArrow("up"); await setup.flush();
       expect(app.list.getSelectedIndex()).toBe(0);
       expect(app.detail.title).toBe("https://linear.app/x/APP-4");
+      setup.mockInput.pressKey("k"); await setup.flush();
+      expect(app.root.findDescendantById("tui-actions")).toBeDefined();
+      expect(app.list.getSelectedIndex()).toBe(0);
+      setup.mockInput.pressEscape(); await Bun.sleep(40); await setup.flush();
       setup.mockInput.pressEnter();
       await setup.waitFor(() => !app.list.visible && app.detail.visible && app.detail.focused);
       expect(app.detail.title).toBe("https://linear.app/x/ENG-42");
@@ -1864,8 +1868,8 @@ describe("responsive controls", () => {
     expect(chipLabel("team", "all", false)).toBe("Team all ▾");
     expect(chipLabel("project", "Reliability", false)).toBe("Project Reliability ▾");
     expect(chipLabel("sort", "updated", false)).toBe("Sort updated ▾");
-    expect(footerHint(false, false)).toBe("/ search  ·  a actions  ·  r refresh  ·  q quit");
-    expect(footerHint(true, false)).toBe("esc back  ·  / search  ·  a actions  ·  r refresh  ·  q quit");
+    expect(footerHint(false, false)).toBe("/ search  ·  k actions  ·  r refresh  ·  q quit");
+    expect(footerHint(true, false)).toBe("esc back  ·  / search  ·  k actions  ·  r refresh  ·  q quit");
     expect(footerHint(false, true)).toBe("/ search  ·  q quit");
     for (const width of [110, 60, 40]) {
       const setup = await createTestRenderer({ width, height: 28 });
@@ -1905,6 +1909,8 @@ describe("open in Linear", () => {
     expect(isRemoteSession({})).toBe(false);
     expect(openChipLabel(false)).toBe("Open ↗");
     expect(openChipLabel(true)).toBe("↗");
+    expect(openChipLabel(false, true)).toBe("Worktree ↗");
+    expect(openChipLabel(true, true)).toBe("WT ↗");
     expect(openCommand("darwin")).toEqual(["open"]);
     expect(openCommand("linux")).toEqual(["xdg-open"]);
     expect(openCommand("win32")).toEqual(["cmd", "/c", "start", ""]);

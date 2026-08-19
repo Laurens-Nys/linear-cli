@@ -98,7 +98,7 @@ describe("TUI undo", () => {
     );
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Moved ENG-42 to In Progress · u undo"));
       expect(app.list.getSelectedIssue()?.state.id).toBe("st-doing");
@@ -168,7 +168,7 @@ describe("TUI undo", () => {
     );
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("u undo"));
       await Bun.sleep(60); await setup.flush();
@@ -195,10 +195,10 @@ describe("TUI undo", () => {
     );
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("In Progress · u undo"));
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("done"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Moved ENG-42 to Done · u undo"));
       setup.mockInput.pressKey("u");
@@ -223,7 +223,7 @@ describe("TUI undo", () => {
     );
     try {
       app.start(); await setup.waitFor(() => app.detailMarkdown.content.includes("Todo")); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Moved ENG-42 to In Progress · u undo"));
       expect(app.list.getSelectedIssue()?.state.id).toBe("st-doing");
@@ -257,11 +257,11 @@ describe("TUI undo", () => {
     );
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("u undo"));
 
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("priority"); setup.mockInput.pressEnter(); await setup.flush();
       await setup.mockInput.typeText("urgent"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.list.getSelectedIssue()?.priority === 1);
@@ -269,10 +269,10 @@ describe("TUI undo", () => {
       setup.mockInput.pressKey("u"); await setup.flush();
       expect(moves).toEqual(["st-doing"]);
 
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("done"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("u undo"));
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("comment"); setup.mockInput.pressEnter(); await setup.flush();
       await setup.mockInput.typeText("Looks good."); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Commented on ENG-42"));
@@ -299,10 +299,10 @@ describe("TUI undo", () => {
     );
     try {
       app.start(); await setup.waitFor(() => loads === 1 && app.list.options.length === 1); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Moved ENG-42 to In Progress · u undo"));
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("done"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Could not move ENG-42"));
       expect(app.list.getSelectedIssue()?.state.id).toBe("st-doing");
@@ -357,7 +357,7 @@ describe("TUI quiet refresh", () => {
       await setup.waitFor(() => loads.length === 1);
       loads[0]!.resolve([issues[0]!]);
       await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       expect(app.root.findDescendantById("tui-actions")).toBeDefined();
       await app.refresh({ quiet: true });
       expect(loads).toHaveLength(1);
@@ -390,7 +390,7 @@ describe("TUI quiet refresh", () => {
     );
     try {
       app.start(); await setup.waitFor(() => loads === 1 && app.list.options.length === 1); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("copy eng"); setup.mockInput.pressEnter(); await setup.flush();
       expect(app.footer.plainText).toContain("copied ENG-42");
       await setup.waitFor(() => loads >= 2);
@@ -458,7 +458,7 @@ describe("TUI quiet refresh", () => {
       await setup.waitFor(() => app.list.options.length === 1); await setup.flush();
       const quiet = app.refresh({ quiet: true });
       await setup.waitFor(() => loads.length === 2);
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("in progress"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.footer.plainText.includes("Could not move ENG-42"));
       loads[1]!.resolve([issues[0]!]);
@@ -616,7 +616,7 @@ describe("TUI palette and select seams", () => {
     } finally { setup.renderer.destroy(); }
   });
 
-  test("keyboard a searches loaded issues and opens the chosen list row", async () => {
+  test("keyboard k searches loaded issues and opens the chosen list row", async () => {
     const setup = await createTestRenderer({ width: 110, height: 30 });
     const app = currentApp = new TuiApp(
       setup.renderer,
@@ -626,7 +626,7 @@ describe("TUI palette and select seams", () => {
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       expect(app.list.getSelectedIssue()?.identifier).toBe("ENG-42");
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       expect(actionNames(app)).toContain("Open in Linear");
       expect(actionNames(app)).toContain("APP-4  Rotate webhook secrets");
       const input = app.root.findDescendantById("tui-actions-search") as import("@opentui/core").InputRenderable;
@@ -652,7 +652,7 @@ describe("TUI palette and select seams", () => {
       setup.mockInput.pressKey("b");
       await setup.waitFor(() => app.board.visible && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
       await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       expect(actionNames(app)).toContain("Move to In Progress");
       expect(actionNames(app)).toContain("APP-4  Rotate webhook secrets");
       await setup.mockInput.typeText("app-4"); await setup.flush();
@@ -673,7 +673,7 @@ describe("TUI palette and select seams", () => {
     );
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       const input = app.root.findDescendantById("tui-actions-search") as import("@opentui/core").InputRenderable;
       input.value = "";
       await setup.mockInput.typeText("ENG-42"); await setup.flush();
@@ -702,7 +702,7 @@ describe("TUI palette and select seams", () => {
       setup.mockInput.pressKey("b");
       await setup.waitFor(() => app.board.visible && app.root.findDescendantById("tui-board-card-ENG-42") !== undefined);
       await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       const input = app.root.findDescendantById("tui-actions-search") as import("@opentui/core").InputRenderable;
       input.value = "";
       await setup.mockInput.typeText("ENG-42"); await setup.flush();
@@ -752,7 +752,7 @@ describe("TUI palette and select seams", () => {
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       expect(app.list.visible).toBe(true);
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       const modal = app.root.findDescendantById("tui-actions") as import("@opentui/core").BoxRenderable;
       expect(modal.width).toBeGreaterThan(40);
       expect(app.root.findDescendantById("tui-actions-search")?.focused).toBe(true);
@@ -761,7 +761,7 @@ describe("TUI palette and select seams", () => {
       setup.mockInput.pressKey("u");
       await setup.waitFor(() => moves.includes("st-todo"));
       expect(moves).toEqual(["st-doing", "st-todo"]);
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("webhook"); setup.mockInput.pressEnter();
       await setup.waitFor(() => app.detail.visible && (app.detail.title?.includes("APP-4") ?? false));
       expect(app.list.visible).toBe(false);

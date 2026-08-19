@@ -38,7 +38,7 @@ Empty fields are dropped, dates are YYYY-MM-DD, priority is a word (urgent|high|
 \`--fields a,b\` selects columns only on table commands; bare \`--fields\` lists them. Non-table commands reject it.
 \`lin cache warm\` follows every vocabulary page, then writes once.
 Exit codes: 0 ok, 1 API or network, 2 correctable input (line two lists the valid values), 3 auth, 4 not found.
-Auth: \`export LINEAR_API_KEY\`, else exit 3. Create the key in Linear Settings > Security & access > Personal API keys. Config \`.lin.toml\`: \`team = "ENG"\`, \`limit = 50\` (integer 1-250); optional \`worktree_repo\` and \`worktree_agent\` enable TUI Open as worktree (requires a Herdr session; draft prompt is staged unsent). \`LIN_TEAM\`/\`LIN_LIMIT\`/\`LIN_WORKTREE_REPO\`/\`LIN_WORKTREE_AGENT\` beat the file, flags beat team/limit. \`lin doctor\` prints a setup checks table.
+Auth: \`export LINEAR_API_KEY\`, else exit 3. Create the key in Linear Settings > Security & access > Personal API keys. Config \`.lin.toml\`: \`team = "ENG"\`, \`limit = 50\` (integer 1-250); optional \`worktree_repo\` and \`worktree_agent\` replace TUI Open with Open as worktree (requires a Herdr session; draft prompt is staged unsent after focus). \`LIN_TEAM\`/\`LIN_LIMIT\`/\`LIN_WORKTREE_REPO\`/\`LIN_WORKTREE_AGENT\` beat the file, flags beat team/limit. \`lin doctor\` prints a setup checks table.
 Shorthand: \`lin ENG-42\` is \`lin issue view ENG-42\`; \`lin today\` is assigned issues that are started, overdue, urgent/high, or blocked. An issue URL or UUID works anywhere an identifier does.
 `;
 

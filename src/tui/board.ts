@@ -258,7 +258,7 @@ export class KanbanBoardRenderable extends ScrollBoxRenderable {
     }
     const sameColumn = this.issues.filter((issue) => issue.state.id === selected.state.id);
     const index = sameColumn.findIndex((issue) => issue.identifier === selected.identifier);
-    if (key.name === "up" || key.name === "k") {
+    if (key.name === "up") {
       this.selectIssue(sameColumn[Math.max(0, index - 1)] ?? selected);
       return true;
     }

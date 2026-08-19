@@ -101,7 +101,8 @@ export function chipLabel(kind: PickerKind, value: string, compact: boolean): st
   return `${title} ${clip(value, max)} ▾`;
 }
 
-export function openChipLabel(compact: boolean): string {
+export function openChipLabel(compact: boolean, worktree = false): string {
+  if (worktree) return compact ? "WT ↗" : "Worktree ↗";
   return compact ? "↗" : "Open ↗";
 }
 
@@ -118,12 +119,12 @@ export function footerHint(
 ): string {
   if (searching) return "enter apply  ·  esc cancel";
   if (listHidden) {
-    return compact ? "esc back  ·  q quit" : "esc back  ·  / search  ·  a actions  ·  r refresh  ·  q quit";
+    return compact ? "esc back  ·  q quit" : "esc back  ·  / search  ·  k actions  ·  r refresh  ·  q quit";
   }
   if (layout === "board") {
-    return compact ? "drag move  ·  b list  ·  q quit" : "drag move  ·  click open  ·  a actions  ·  b list  ·  / search  ·  r refresh  ·  q quit";
+    return compact ? "drag move  ·  b list  ·  q quit" : "drag move  ·  click open  ·  k actions  ·  b list  ·  / search  ·  r refresh  ·  q quit";
   }
-  return compact ? "/ search  ·  q quit" : "/ search  ·  a actions  ·  r refresh  ·  q quit";
+  return compact ? "/ search  ·  q quit" : "/ search  ·  k actions  ·  r refresh  ·  q quit";
 }
 
 export class TuiApp {
@@ -855,7 +856,7 @@ export class TuiApp {
     });
     const chip = new BoxRenderable(this.renderer, {
       id: "tui-open-chip", height: 1, backgroundColor: "transparent",
-      onMouseDown: (event) => { this.openInLinear(); event.preventDefault(); },
+      onMouseDown: (event) => { this.openChipAction(); event.preventDefault(); },
       onMouseOver: () => this.renderer.setMousePointer("pointer"),
       onMouseOut: () => this.renderer.setMousePointer("default"),
     });
@@ -951,7 +952,7 @@ export class TuiApp {
     this.teamText.content = teamLabel;
     this.projectText.content = projectLabel;
     this.sortText.content = sortLabel;
-    const openLabel = openChipLabel(compact);
+    const openLabel = openChipLabel(compact, this.worktreeConfigured());
     this.teamChip.width = teamLabel.length;
     this.projectChip.width = projectLabel.length;
     this.sortChip.width = sortLabel.length;
@@ -1291,6 +1292,15 @@ export class TuiApp {
     }
   }
 
+  private openChipAction(issue = this.shownIssue()): void {
+    if (!issue) return;
+    if (this.worktreeConfigured()) {
+      void this.openAsWorktree(issue);
+      return;
+    }
+    this.openInLinear(issue);
+  }
+
   openInLinear(issue = this.shownIssue()): void {
     if (!issue) return;
     const remote = this.options.remote ?? isRemoteSession();
@@ -1363,7 +1373,7 @@ export class TuiApp {
     if (key.name === "z") { key.preventDefault(); this.toggleListPane(); return; }
     if (key.name === "b") { key.preventDefault(); this.toggleLayout(); return; }
     if (key.name === "/") { key.preventDefault(); this.openSearch(); return; }
-    if (key.name === "a") { key.preventDefault(); this.openPalette(); return; }
+    if (key.name === "k") { key.preventDefault(); this.openPalette(); return; }
     if (key.name === "u") { key.preventDefault(); void this.undoMove(); return; }
     const viewIndex = this.layout === "list" ? VIEW_TABS.find((tab) => tab.key === key.name) : undefined;
     if (viewIndex) { key.preventDefault(); this.setView(viewIndex.view); return; }
@@ -1372,7 +1382,7 @@ export class TuiApp {
     if (key.name === "s") { key.preventDefault(); this.openPicker("sort"); return; }
     if (key.name === "q") { key.preventDefault(); this.quit(); return; }
     if (key.name === "r") { key.preventDefault(); if (!this.isBusy()) void this.refresh(); return; }
-    if (key.name === "o") { key.preventDefault(); this.openInLinear(); return; }
+    if (key.name === "o" && !this.worktreeConfigured()) { key.preventDefault(); this.openInLinear(); return; }
     if (key.name === "pageup") {
       key.preventDefault();
       if (this.detail.focused) this.detail.scrollBy(-1, "viewport");

@@ -185,7 +185,7 @@ export class IssueListRenderable extends ScrollBoxRenderable {
   }
 
   override handleKeyPress(key: KeyEvent): boolean {
-    if (key.name === "up" || key.name === "k") { this.moveUp(); return true; }
+    if (key.name === "up") { this.moveUp(); return true; }
     if (key.name === "down" || key.name === "j") { this.moveDown(); return true; }
     if (key.name === "return" || key.name === "enter") {
       if (this.getSelectedIssue()) {

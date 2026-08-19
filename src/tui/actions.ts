@@ -95,12 +95,9 @@ export function tuiIssueActions(
   team: CachedTeam | undefined,
   options?: { worktree?: boolean },
 ): TuiActionItem[] {
-  const items: TuiActionItem[] = [
-    { id: "open", name: "Open in Linear", dispatch: { type: "open" } },
-  ];
-  if (options?.worktree) {
-    items.push({ id: "worktree", name: "Open as worktree", dispatch: { type: "worktree" } });
-  }
+  const items: TuiActionItem[] = options?.worktree
+    ? [{ id: "worktree", name: "Open as worktree", dispatch: { type: "worktree" } }]
+    : [{ id: "open", name: "Open in Linear", dispatch: { type: "open" } }];
   items.push(
     { id: "copy-id", name: `Copy ${issue.identifier}`, dispatch: { type: "copy-id" } },
     { id: "copy-url", name: "Copy URL", dispatch: { type: "copy-url" } },

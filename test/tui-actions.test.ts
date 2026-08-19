@@ -96,7 +96,7 @@ describe("TUI action catalog", () => {
     const eng = tuiIssueActions(issues[0]!, issueTeam(meta, issues[0]!));
     expect(eng.map((item) => item.id)).toEqual(["open", "copy-id", "copy-url", "start", "done", "priority", "comment"]);
     expect(tuiIssueActions(issues[0]!, issueTeam(meta, issues[0]!), { worktree: true }).map((item) => item.id)).toEqual([
-      "open", "worktree", "copy-id", "copy-url", "start", "done", "priority", "comment",
+      "worktree", "copy-id", "copy-url", "start", "done", "priority", "comment",
     ]);
     expect(eng.map((item) => item.name).join(" ")).not.toMatch(/assign/i);
     expect(eng.find((item) => item.id === "start")?.name).toBe("Move to In Progress");
@@ -127,10 +127,10 @@ describe("TUI action catalog", () => {
   });
 
   test("footer names the action key without adding chrome", () => {
-    expect(footerHint(false, false)).toContain("a actions");
-    expect(footerHint(false, false, false, "board")).toContain("a actions");
-    expect(footerHint(true, false)).toContain("a actions");
-    expect(footerHint(false, true)).not.toContain("a actions");
+    expect(footerHint(false, false)).toContain("k actions");
+    expect(footerHint(false, false, false, "board")).toContain("k actions");
+    expect(footerHint(true, false)).toContain("k actions");
+    expect(footerHint(false, true)).not.toContain("k actions");
   });
 });
 
@@ -187,13 +187,13 @@ describe("TUI action menu", () => {
     } finally { setup.renderer.destroy(); }
   });
 
-  test("keyboard a opens a searchable menu for the selected issue", async () => {
+  test("keyboard k opens a searchable menu for the selected issue", async () => {
     const setup = await createTestRenderer({ width: 110, height: 30 });
     const app = currentApp = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues, async (id) => detailLoader(id)), appOptions());
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       setup.mockInput.pressKey("j"); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       expect((app.root.findDescendantById("tui-actions") as import("@opentui/core").BoxRenderable).title).toBe("APP-4");
       expect(actionNames()[0]).toBe("Open in Linear");
       expect(actionNames()).toContain("ENG-42  Fix login redirect");
@@ -214,14 +214,14 @@ describe("TUI action menu", () => {
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       app.list.focus();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       const list = currentList()!;
       await setup.mockMouse.click(list.screenX + 2, list.screenY + 1); await setup.flush();
       expect(copied).toEqual(["ENG-42"]);
       expect(app.root.findDescendantById("tui-actions")).toBeUndefined();
       expect(app.list.focused).toBe(true);
 
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       const input = app.root.findDescendantById("tui-actions-search") as import("@opentui/core").InputRenderable;
       input.focus();
       setup.mockInput.pressArrow("down"); await setup.flush();
@@ -229,7 +229,7 @@ describe("TUI action menu", () => {
       setup.mockInput.pressArrow("down"); setup.mockInput.pressArrow("down"); setup.mockInput.pressEnter(); await setup.flush();
       expect(copied).toEqual(["ENG-42", "https://linear.app/x/ENG-42"]);
 
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       expect(app.root.findDescendantById("tui-actions")).toBeDefined();
       setup.mockInput.pressEscape(); await Bun.sleep(40); await setup.flush();
       expect(app.root.findDescendantById("tui-actions")).toBeUndefined();
@@ -242,7 +242,7 @@ describe("TUI action menu", () => {
     const app = currentApp = new TuiApp(setup.renderer, new TuiIssueStore(async () => issues, async (id) => detailLoader(id)), appOptions());
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("priority"); setup.mockInput.pressEnter(); await setup.flush();
       expect((app.root.findDescendantById("tui-actions") as import("@opentui/core").BoxRenderable).title).toContain("Priority");
       expect(actionNames()).toEqual(["Urgent", "High", "Medium", "Low", "No priority"]);
@@ -289,7 +289,7 @@ describe("TUI action menu", () => {
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       const run = async (query: string) => {
-        setup.mockInput.pressKey("a"); await setup.flush();
+        setup.mockInput.pressKey("k"); await setup.flush();
         const input = app.root.findDescendantById("tui-actions-search") as import("@opentui/core").InputRenderable;
         input.value = "";
         await setup.mockInput.typeText(query); await setup.flush();
@@ -494,7 +494,7 @@ describe("TUI action menu", () => {
     try {
       app.start(); await setup.waitFor(() => app.list.options.length === 2); await setup.flush();
       expect(app.list.visible).toBe(true);
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       const modal = app.root.findDescendantById("tui-actions") as import("@opentui/core").BoxRenderable;
       expect(modal).toBeDefined();
       expect(app.root.findDescendantById("tui-actions-search")?.focused).toBe(true);
@@ -502,7 +502,7 @@ describe("TUI action menu", () => {
       setup.mockInput.pressEscape(); await Bun.sleep(40); await setup.flush();
       expect(app.list.focused).toBe(true);
       app.detail.focus();
-      setup.mockInput.pressKey("a"); await setup.flush();
+      setup.mockInput.pressKey("k"); await setup.flush();
       await setup.mockInput.typeText("comment"); setup.mockInput.pressEnter(); await setup.flush();
       expect(app.root.findDescendantById("tui-comment-input")?.focused).toBe(true);
       setup.mockInput.pressEscape(); await Bun.sleep(40); await setup.flush();
